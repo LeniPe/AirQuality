@@ -1,3 +1,4 @@
+from src.validate import validate
 from src.preprocessing import preprocess_measurements, select_stations
 from src.train import train_model
 from src.predict import predict
@@ -40,7 +41,7 @@ def main():
     writer = SummaryWriter()
 
     model = train_model(feature_cols, target_col, writer=writer, num_epochs=10)
-
+    validate(feature_cols, target_col, model)
     predict(feature_cols, target_col, model, writer=writer)
 
 
