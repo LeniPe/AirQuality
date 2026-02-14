@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 from src.fetch_data import (
     fetch_hourly_measurements,
@@ -120,6 +121,14 @@ def preprocess_measurements(
     )
 
     train_df, test_df = train_test_split(measurements_df, test_size=0.2)
+
+    station_codes, station_index = pd.factorize(train_df["station_id"])
+    station_to_int = {station: i for i, station in enumerate(station_index)}
+    with open("data/station_mapping.json", "w") as f:
+        json.dump(station_to_int, f)
+
+    train_df["station_code"] = station_codes
+    test_df["station_code"] = test_df["station_id"].map(station_to_int)
 
     scaler = StandardScaler()
     scaler.fit(train_df[param_names])

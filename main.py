@@ -15,11 +15,12 @@ def main():
         "doy_cos",
     ]
     measurements_feature_cols = ["temp", "feuchte", "windge", "no2"]
+    spatial_feature_cols = ["station_code"]
     lags = [1]
     lag_feature_cols = []
     for lag in lags:
         lag_feature_cols += [f"{x}_lag{lag}" for x in measurements_feature_cols]
-    feature_cols = temporal_feature_cols + lag_feature_cols
+    feature_cols = temporal_feature_cols + spatial_feature_cols + lag_feature_cols
     print(f"Using features: {feature_cols}")
     target_col = "no2"
 

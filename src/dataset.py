@@ -21,10 +21,13 @@ class TabularTimeSeriesDataset(Dataset):
         self.target_col = target_col
 
         self.X = torch.tensor(self.df[feature_cols].values, dtype=torch.float32)
+        self.station_code = torch.tensor(
+            self.df["station_code"].values, dtype=torch.long
+        )
         self.y = torch.tensor(self.df[target_col].values, dtype=torch.float32)
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
-        return self.X[idx], self.y[idx]
+        return self.X[idx], self.station_code[idx], self.y[idx]
