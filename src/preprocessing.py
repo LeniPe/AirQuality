@@ -192,37 +192,10 @@ def retrieve_measurements(param_ids, stations, start, end):
 
 
 def encode_cyclic_features(x: pd.Series, name: str, measurements_df: pd.DataFrame):
-    """
-    Encode a cyclic feature into sine and cosine components.
-
-    This function transforms a cyclic variable (e.g., hour of day, day of week, month)
-    into its sine and cosine representations, which helps machine learning models
-    understand the circular nature of the data.
-
-    Parameters
-    ----------
-    x : pd.Series
-        The cyclic feature values to be encoded.
-    name : str
-        The base name for the output columns. Two columns will be created:
-        '{name}_sin' and '{name}_cos'.
-    measurements_df : pd.DataFrame
-        The DataFrame to which the encoded features will be added as new columns.
-
-    Returns
-    -------
-    pd.DataFrame
-        The input DataFrame with two new columns containing the sine and cosine
-        encoded features, rounded to 2 decimal places.
-    """
 
     max_value = x.max()
-    measurements_df[f"{name}_sin"] = np.round(
-        np.sin(2 * np.pi * x / max_value), decimals=2
-    )
+    measurements_df[f"{name}_sin"] = np.sin(2 * np.pi * x / max_value)
 
-    measurements_df[f"{name}_cos"] = np.round(
-        np.cos(2 * np.pi * x / max_value), decimals=2
-    )
+    measurements_df[f"{name}_cos"] = np.cos(2 * np.pi * x / max_value)
 
     return measurements_df
