@@ -8,19 +8,20 @@ import torch
 
 
 def validate(feature_cols, target_cols, model):
-    test_df = pd.read_csv("data/processed/test.csv")
+    test_df = pd.read_csv("data/processed/test.csv", dtype={"station_id": str})
 
     test_df.dropna(inplace=True)
+    test_df = test_df[test_df["station_id"] == "0104"]
+    test_df.reset_index(drop=True, inplace=True)
 
     mse_p1 = mean_squared_error(
         test_df[target_cols], test_df[["no2_lag1"] * len(target_cols)]
     )
 
     test_dataset = TabularTimeSeriesDataset(
-        path="data/processed/test.csv",
+        test_df,
         feature_cols=feature_cols,
         target_cols=target_cols,
-        station_id="0104",
     )
 
     test_loader = DataLoader(test_dataset, batch_size=256, num_workers=2)

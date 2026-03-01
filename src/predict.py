@@ -3,6 +3,7 @@ import datetime
 from pathlib import Path
 import numpy as np
 import joblib
+import pandas as pd
 
 import torch
 import matplotlib.pyplot as plt
@@ -21,17 +22,20 @@ OUTPUT_PATH = Path("output/predictions.png")
 
 
 def predict(
-    feature_cols,
-    target_cols,
-    model,
-    station_id="0104",
-    datetime_str="2025-11-08 11:00:00",
+    feature_cols: list[str],
+    target_cols: list[str],
+    model: SimpleRegressor,
+    station_id: str = "0104",
+    datetime_str: str = "2025-11-08 11:00:00",
 ):
+    df = pd.read_csv(str(TEST_PATH), dtype={"station_id": str})
+    df = df[df["station_id"] == station_id]
+    df.reset_index(drop=True, inplace=True)
+
     dataset = TabularTimeSeriesDataset(
-        path=str(TEST_PATH),
+        df,
         feature_cols=feature_cols,
         target_cols=target_cols,
-        station_id=station_id,
     )
     print(dataset.df.datetime.min(), dataset.df.datetime.max())
     # Filter dataset for specific date
