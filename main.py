@@ -1,9 +1,10 @@
+import json
 from src.validate import validate
 from src.preprocessing import preprocess_measurements, select_stations
-from src.train import train_model
-from src.predict import predict
+from src.train import train_model, feature_selection
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
+import torch
 
 
 def main():
@@ -17,13 +18,16 @@ def main():
     ]
     measurements_feature_cols = ["temp", "feuchte", "windge", "no2"]
     spatial_feature_cols = ["station_code"]
-    lags = [1]
+    lags = [1, 2]
     lag_feature_cols = []
     for lag in lags:
         lag_feature_cols += [f"{x}_lag{lag}" for x in measurements_feature_cols]
     feature_cols = temporal_feature_cols + spatial_feature_cols + lag_feature_cols
     print(f"Using features: {feature_cols}")
     target_col = "no2"
+    forecast_horizon = 12
+    target_cols = [f"target_{target_col}_lag{i + 1}" for i in range(forecast_horizon)]
+    num_epochs = 10
 
     start, end = datetime(2025, 1, 1), datetime(2025, 12, 31)
     stations = select_stations(start=start, end=end)
@@ -35,14 +39,45 @@ def main():
         lags=lags,
         start=start,
         end=end,
+        target_col=target_col,
+        forecast_horizon=forecast_horizon,
         retrieve_new_measurements=False,
     )
+    select_features = False
+    if select_features:
+        selected_features = feature_selection(
+            feature_cols=feature_cols, target_cols=target_cols, num_epochs=num_epochs
+        )
+        print(f"Selected features: {selected_features}")
+    else:
+        selected_features = feature_cols
 
     writer = SummaryWriter()
+    config = {
+        "feature_cols": selected_features,
+        "target_col": target_col,
+        "forecast_horizon": forecast_horizon,
+        "num_epochs": num_epochs,
+    }
+    writer.add_hparams(
+        {"hparam/forecast_horizon": forecast_horizon, "hparam/num_epochs": num_epochs},
+        {"metric/mse": 0},
+    )
+    writer.add_text("config", json.dumps(config, indent=4))
 
-    model = train_model(feature_cols, target_col, writer=writer, num_epochs=10)
-    validate(feature_cols, target_col, model)
-    predict(feature_cols, target_col, model, writer=writer)
+    model = train_model(
+        feature_cols=selected_features,
+        target_cols=target_cols,
+        writer=writer,
+        num_epochs=num_epochs,
+    )
+
+    checkpoint = {
+        "model_state_dict": model.state_dict(),
+        "config": config,
+    }
+    torch.save(checkpoint, "output/model_checkpoint.pth")
+    validate(feature_cols=selected_features, target_cols=target_cols, model=model)
 
 
 if __name__ == "__main__":

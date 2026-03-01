@@ -10,6 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from datetime import datetime
 from glob import glob
 import numpy as np
+import joblib
 
 
 def map_param_id_to_name(
@@ -46,20 +47,26 @@ def map_param_name_to_id(
 
 
 def train_test_split(
-    df: pd.DataFrame, test_size: float = 0.1
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df: pd.DataFrame, validation_size: float = 0.1, test_size: float = 0.1
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
     timestamps = df["datetime"].sort_values().unique()
-    split_index = int(len(timestamps) * (1 - test_size))
-    train_df = df[df["datetime"].isin(timestamps[:split_index])]
-    test_df = df[df["datetime"].isin(timestamps[split_index:])]
+    val_split_index = int(len(timestamps) * (1 - validation_size - test_size))
+    test_split_index = int(len(timestamps) * (1 - test_size))
+
+    train_df = df[df["datetime"].isin(timestamps[:val_split_index])]
+    val_df = df[df["datetime"].isin(timestamps[val_split_index:test_split_index])]
+    test_df = df[df["datetime"].isin(timestamps[test_split_index:])]
     print(
         f"Train set: {train_df['datetime'].min()} - {train_df['datetime'].max()} with {len(train_df.station_id.unique())} stations"
     )
     print(
+        f"Validation set: {val_df['datetime'].min()} - {val_df['datetime'].max()} with {len(val_df.station_id.unique())} stations"
+    )
+    print(
         f"Test set: {test_df['datetime'].min()} - {test_df['datetime'].max()} with {len(test_df.station_id.unique())} stations"
     )
-    return train_df, test_df
+    return train_df, val_df, test_df
 
 
 def preprocess_measurements(
@@ -68,6 +75,8 @@ def preprocess_measurements(
     lags: list[int],
     start: datetime,
     end: datetime,
+    target_col: str,
+    forecast_horizon: int,
     retrieve_new_measurements: bool = False,
 ) -> None:
 
@@ -120,7 +129,9 @@ def preprocess_measurements(
         measurements_df["datetime"].dt.dayofyear, "doy", measurements_df
     )
 
-    train_df, test_df = train_test_split(measurements_df, test_size=0.2)
+    train_df, val_df, test_df = train_test_split(
+        measurements_df, validation_size=0.1, test_size=0.1
+    )
 
     station_codes, station_index = pd.factorize(train_df["station_id"])
     station_to_int = {station: i for i, station in enumerate(station_index)}
@@ -129,18 +140,38 @@ def preprocess_measurements(
 
     train_df["station_code"] = station_codes
     test_df["station_code"] = test_df["station_id"].map(station_to_int)
+    val_df["station_code"] = val_df["station_id"].map(station_to_int)
 
     scaler = StandardScaler()
     scaler.fit(train_df[param_names])
 
+    joblib.dump(scaler, "data/std_scaler.joblib")
+
     train_df[param_names] = scaler.transform(train_df[param_names])
     test_df[param_names] = scaler.transform(test_df[param_names])
+    val_df[param_names] = scaler.transform(val_df[param_names])
 
     train_df = add_lag_features(param_names, train_df, lags)
     test_df = add_lag_features(param_names, test_df, lags)
+    val_df = add_lag_features(param_names, val_df, lags)
+
+    train_df = add_target_feature(
+        target_col=target_col,
+        measurements_df=train_df,
+        forecast_horizon=forecast_horizon,
+    )
+    test_df = add_target_feature(
+        target_col=target_col,
+        measurements_df=test_df,
+        forecast_horizon=forecast_horizon,
+    )
+    val_df = add_target_feature(
+        target_col=target_col, measurements_df=val_df, forecast_horizon=forecast_horizon
+    )
 
     train_df.to_csv("data/processed/train.csv", index=False)
     test_df.to_csv("data/processed/test.csv", index=False)
+    val_df.to_csv("data/processed/val.csv", index=False)
 
 
 def select_stations(start: datetime, end: datetime) -> list[str]:
@@ -168,6 +199,16 @@ def add_lag_features(param_names, measurements_df, lags):
     return measurements_df
 
 
+def add_target_feature(target_col, measurements_df, forecast_horizon):
+    measurements_df = measurements_df.sort_values(["station_id", "datetime"])
+    for i in range(forecast_horizon):
+        measurements_df[f"target_{target_col}_lag{i + 1}"] = measurements_df.groupby(
+            "station_id"
+        )[target_col].shift(-i)
+    measurements_df.dropna(inplace=True)
+    return measurements_df
+
+
 def retrieve_measurements(param_ids, stations, start, end):
     for station in stations:
         available_param_ids, available_value_types = fetch_station_details(station)
@@ -176,7 +217,7 @@ def retrieve_measurements(param_ids, stations, start, end):
                 f"Station {station} does not have all required parameters, skipping..."
             )
             continue
-        if not 2 in available_value_types:
+        if 2 not in available_value_types:
             print(available_value_types)
             print(f"Station {station} does not have hourly data, skipping...")
             continue
