@@ -108,26 +108,8 @@ def preprocess_measurements(
         inplace=True,
     )
 
-    measurements_df.drop_duplicates(inplace=True)
-
-    measurements_df["datetime"] = pd.to_datetime(measurements_df["timestamp"], unit="s")
-
-    measurements_df = (
-        measurements_df.set_index("datetime")
-        .groupby("station_id")
-        .resample("1h")
-        .mean()
-        .reset_index()
-    )
-
-    measurements_df["day_of_week"] = measurements_df["datetime"].dt.day_of_week / 6
-
-    measurements_df = encode_cyclic_features(
-        measurements_df["datetime"].dt.hour, "hour", measurements_df
-    )
-    measurements_df = encode_cyclic_features(
-        measurements_df["datetime"].dt.dayofyear, "doy", measurements_df
-    )
+    measurements_df = clean_and_resample(measurements_df)
+    measurements_df = add_temporal_features(measurements_df)
 
     train_df, val_df, test_df = train_test_split(
         measurements_df, validation_size=0.1, test_size=0.1
@@ -151,22 +133,24 @@ def preprocess_measurements(
     test_df[param_names] = scaler.transform(test_df[param_names])
     val_df[param_names] = scaler.transform(val_df[param_names])
 
-    train_df = add_lag_features(param_names, train_df, lags)
-    test_df = add_lag_features(param_names, test_df, lags)
-    val_df = add_lag_features(param_names, val_df, lags)
+    train_df = add_lag_features(train_df,param_names,  lags)
+    test_df = add_lag_features(test_df, param_names, lags)
+    val_df = add_lag_features(val_df, param_names, lags)
 
-    train_df = add_target_feature(
+    train_df = add_target_features(
+        df=train_df,
         target_col=target_col,
-        measurements_df=train_df,
         forecast_horizon=forecast_horizon,
     )
-    test_df = add_target_feature(
+    test_df = add_target_features(
+        df=test_df,
         target_col=target_col,
-        measurements_df=test_df,
         forecast_horizon=forecast_horizon,
     )
-    val_df = add_target_feature(
-        target_col=target_col, measurements_df=val_df, forecast_horizon=forecast_horizon
+    val_df = add_target_features(
+        df=val_df,
+        target_col=target_col,
+        forecast_horizon=forecast_horizon
     )
 
     train_df.to_csv("data/processed/train.csv", index=False)
@@ -186,27 +170,27 @@ def select_stations(start: datetime, end: datetime) -> list[str]:
     return stations_df["stationId"].astype(str).tolist()
 
 
-def add_lag_features(param_names, measurements_df, lags):
-    measurements_df = measurements_df.sort_values(["station_id", "datetime"])
+def add_lag_features(df: pd.DataFrame, param_names: list[str], lags: list[int]) -> pd.DataFrame:
+    df = df.sort_values(["station_id", "datetime"])
 
     for lag in lags:
         for param in param_names:
-            measurements_df[f"{param}_lag{lag}"] = measurements_df.groupby(
+            df[f"{param}_lag{lag}"] = df.groupby(
                 "station_id"
             )[param].shift(lag)
 
-    measurements_df.dropna(inplace=True)
-    return measurements_df
+    df.dropna(inplace=True)
+    return df
 
 
-def add_target_feature(target_col, measurements_df, forecast_horizon):
-    measurements_df = measurements_df.sort_values(["station_id", "datetime"])
+def add_target_features(df: pd.DataFrame, target_col: str, forecast_horizon: int) -> pd.DataFrame:
+    df = df.sort_values(["station_id", "datetime"])
     for i in range(forecast_horizon):
-        measurements_df[f"target_{target_col}_lag{i + 1}"] = measurements_df.groupby(
+        df[f"target_{target_col}_lag{i + 1}"] = df.groupby(
             "station_id"
         )[target_col].shift(-i)
-    measurements_df.dropna(inplace=True)
-    return measurements_df
+    df.dropna(inplace=True)
+    return df
 
 
 def retrieve_measurements(param_ids, stations, start, end):
@@ -240,3 +224,27 @@ def encode_cyclic_features(x: pd.Series, name: str, measurements_df: pd.DataFram
     measurements_df[f"{name}_cos"] = np.cos(2 * np.pi * x / max_value)
 
     return measurements_df
+
+def clean_and_resample(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.drop_duplicates()
+    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s")
+    df = (
+        df.set_index("datetime")
+        .groupby("station_id")
+        .resample("1h")
+        .mean()
+        .reset_index()
+    )
+    return df
+
+def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
+    df["day_of_week"] = df["datetime"].dt.day_of_week / 6
+
+    df = encode_cyclic_features(
+        df["datetime"].dt.hour, "hour", df
+    )
+    df = encode_cyclic_features(
+        df["datetime"].dt.dayofyear, "doy", df
+    )
+
+    return df
