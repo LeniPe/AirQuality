@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 import pandas as pd
 from src.dataset import TabularTimeSeriesDataset
 from torch.utils.data import DataLoader
@@ -9,7 +10,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 def validate(feature_cols, target_cols, model, loss_fn, device="cpu"):
-    df = pd.read_csv("data/processed/val.csv",  dtype={"station_id": str}).reset_index(drop=True)
+    df = pd.read_csv("data/processed/val.csv", dtype={"station_id": str}).reset_index(
+        drop=True
+    )
     val_dataset = TabularTimeSeriesDataset(
         df,
         feature_cols=feature_cols,
@@ -64,9 +67,14 @@ def feature_selection(feature_cols, target_cols, num_epochs=10):
 
 
 def train_model(
-    feature_cols, target_cols, num_epochs: int = 20, writer: SummaryWriter = None
+    feature_cols,
+    target_cols,
+    num_epochs: int = 20,
+    writer: Optional[SummaryWriter] = None,
 ):
-    df = pd.read_csv("data/processed/train.csv",  dtype={"station_id": str}).reset_index(drop=True)
+    df = pd.read_csv("data/processed/train.csv", dtype={"station_id": str}).reset_index(
+        drop=True
+    )
     train_dataset = TabularTimeSeriesDataset(
         df,
         feature_cols=feature_cols,

@@ -4,6 +4,7 @@ import requests
 from datetime import datetime
 import pandas as pd
 import os
+from src.time_utils import to_local_timestamp
 
 
 def fetch_hourly_measurements(
@@ -12,27 +13,35 @@ def fetch_hourly_measurements(
     end: datetime,
     param_ids: list[str],
     force: bool = False,
+    persist: bool = True,
 ) -> None:
 
     url = "https://app.hlnug.de"
 
-    start = int(start.timestamp())
-    end = int(end.timestamp())
+    start_timestamp = to_local_timestamp(start)
+    end_timestamp = to_local_timestamp(end)
     param_ids_str = ",".join(param_ids)
 
     limit = 60 * 60 * 1000
+    print(
+        f"Fetching hourly measurements for station {station_id} from {start} to {end}..."
+    )
 
-    while end > start + limit:
-        filename = f"data/raw/{station_id}_hourly_{start}_{start + limit}.csv"
+    while start_timestamp < end_timestamp:
+        chunk_end = min(start_timestamp + limit, end_timestamp)
+        if persist:
+            filename = f"data/raw/{station_id}_hourly_{start_timestamp}_{chunk_end}.csv"
+        else:
+            filename = (
+                f"data/temp/{station_id}_hourly_{start_timestamp}_{chunk_end}.csv"
+            )
         if not force and os.path.exists(filename):
-            # print(f"File {filename} already exists, skipping...")
-            start += limit
+            print(f"File {filename} already exists, skipping...")
+            start_timestamp = chunk_end
             continue
 
-        # print(f"Fetching data from {start} to {start + limit}...")
-
         r = requests.get(
-            f"{url}/json/lmw/getStationTableData/{station_id}/{param_ids_str}/{start}/{start + limit}?valueType=2"
+            f"{url}/json/lmw/getStationTableData/{station_id}/{param_ids_str}/{start_timestamp}/{chunk_end}?valueType=2"
         )
         r.raise_for_status()
 
@@ -40,7 +49,7 @@ def fetch_hourly_measurements(
         df = pd.DataFrame.from_dict(data, orient="index").dropna()
         if len(df) > 0:
             df.to_csv(filename, index=True, index_label="timestamp")
-        start += limit
+        start_timestamp = chunk_end
         sleep(1)
     return
 

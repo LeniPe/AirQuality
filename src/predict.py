@@ -4,18 +4,19 @@ from pathlib import Path
 import numpy as np
 import joblib
 import pandas as pd
+import os
 
 import torch
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 
-from dataset import TabularTimeSeriesDataset
-from model import SimpleRegressor
+from src.model import SimpleRegressor
+from src.fetch_data import fetch_hourly_measurements
+from src.preprocessing import preprocess_inference_measurements, map_param_name_to_id
+from src.time_utils import to_local_datetime, LOCAL_TZ
 
 
 DEVICE = torch.device("cpu")
-TEST_PATH = Path("data/processed/test.csv")
 CHECKPOINT_PATH = Path("output/model_checkpoint.pth")
 STATION_MAP_PATH = Path("data/station_mapping.json")
 OUTPUT_PATH = Path("output/predictions.png")
@@ -23,71 +24,109 @@ OUTPUT_PATH = Path("output/predictions.png")
 
 def predict(
     feature_cols: list[str],
-    target_cols: list[str],
+    target_col: str,
+    lags: list[int],
     model: SimpleRegressor,
     station_id: str = "0104",
-    datetime_str: str = "2025-11-08 11:00:00",
+    datetime_str: str = "2026-03-05 08:00:00",
 ):
-    df = pd.read_csv(str(TEST_PATH), dtype={"station_id": str})
-    df = df[df["station_id"] == station_id]
-    df.reset_index(drop=True, inplace=True)
-
-    dataset = TabularTimeSeriesDataset(
-        df,
-        feature_cols=feature_cols,
-        target_cols=target_cols,
-    )
-    print(dataset.df.datetime.min(), dataset.df.datetime.max())
-    # Filter dataset for specific date
-    target_date = datetime.datetime.timestamp(
+    requested_dt = to_local_datetime(
         datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
     )
-    print(target_date)
-    dataset.df = dataset.df[dataset.df["timestamp"] == target_date]
+    history_hours = max(max(lags), 24)
+    scaler: StandardScaler = joblib.load("data/std_scaler.joblib")
+    param_names = list(scaler.feature_names_in_)  # type: ignore[attr-defined]
+    param_ids = map_param_name_to_id(param_names)
 
-    if dataset.df.empty:
-        print(f"No data found for {datetime_str}")
+    print(requested_dt, requested_dt - datetime.timedelta(hours=history_hours))
+    print(history_hours)
+    return
+
+    os.makedirs("data/temp", exist_ok=True)
+    fetch_hourly_measurements(
+        station_id=station_id,
+        start=requested_dt - datetime.timedelta(hours=history_hours),
+        end=requested_dt,
+        param_ids=param_ids,
+        force=True,
+        persist=False,
+    )
+
+    df = preprocess_inference_measurements(
+        param_names=param_names,
+        station_id=station_id,
+        lags=lags,
+        start=requested_dt - datetime.timedelta(hours=history_hours),
+        end=requested_dt,
+        source_dir="data/temp",
+    )
+    if df.empty:
+        print("No processed inference data available.")
         return
 
-    loader = DataLoader(dataset, batch_size=1, shuffle=False)
+    df["datetime"] = pd.to_datetime(df["datetime"], utc=True).dt.tz_convert(
+        requested_dt.tzinfo
+    )
+
+    df = df[(df["station_id"] == station_id) & (df["datetime"] == requested_dt)]
+    df.reset_index(drop=True, inplace=True)
+
+    if df.empty:
+        print(f"No data found for {datetime_str}")
+        return
     model.eval()
 
-    pred_time = dataset.df["timestamp"].iloc[0]
+    row = df.iloc[0]
+    X = (
+        torch.tensor(row[feature_cols].values.astype(np.float32), dtype=torch.float32)
+        .unsqueeze(0)
+        .to(DEVICE)
+    )
+    station_code = torch.tensor([int(row["station_code"])], dtype=torch.long).to(DEVICE)
 
     with torch.no_grad():
-        for X, station_code, y in loader:
-            X = X.to(DEVICE)
-            station_code = station_code.to(DEVICE)
-            y = y.to(DEVICE)
+        pred = model(X, station_code)
 
-            if y.ndim == 1:
-                y = y.unsqueeze(1)
+    forecast_horizon = pred.shape[1]
+    pred_times = [
+        requested_dt + datetime.timedelta(hours=i) for i in range(forecast_horizon)
+    ]
+    print(pred_times)
 
-            pred = model(X, station_code)
+    pred = inverse_scale_target(pred, target_col=target_col)
+    observed_points: list[tuple[datetime.datetime, float]] = []
+    for lag in sorted(lags, reverse=True):
+        lag_feature = f"{target_col}_lag{lag}"
+        if lag_feature not in feature_cols:
+            continue
+        lag_value = inverse_scale_target(
+            X[0, feature_cols.index(lag_feature)], target_col=target_col
+        )
+        observed_points.append(
+            (requested_dt - datetime.timedelta(hours=lag), float(lag_value.item()))
+        )
 
-            forecast_horizon = pred.shape[1]
-            times = [
-                datetime.datetime.fromtimestamp(pred_time + (i) * 3600)
-                for i in range(forecast_horizon + 1)
-            ]
+    if len(observed_points) == 0:
+        raise ValueError(
+            f"No observed lag features found for target '{target_col}'. Expected at least one of: "
+            + ", ".join([f"{target_col}_lag{lag}" for lag in lags])
+        )
 
-            pred = load_scaler(pred)
-            y = load_scaler(y)
-            X = load_scaler(X)
-            plot_predictions(times, pred[0].numpy(), y[0].numpy(), now=X[0][9].numpy())
-            break
+    observed_times = [t for t, _ in observed_points]
+    observed_values = [v for _, v in observed_points]
+    plot_predictions(pred_times, pred[0].numpy(), observed_times, observed_values)
 
 
-def plot_predictions(times, pred, target, now):
-    pred = np.insert(pred, 0, now)
-    target = np.insert(target, 0, now)
+def plot_predictions(pred_times, pred, observed_times, observed_values):
+    # Convert all times to naive datetime in local timezone for consistent plotting
+
     plt.figure()
-    plt.title(f"NO2 concentration as of {times[0]}")
-    plt.plot(times, pred, label="Predicted")
-    plt.plot(times, target, label="Observed")
+    plt.title(f"NO2 concentration as of {pred_times[0]}")
+    plt.plot(pred_times, pred, label="Predicted", marker="o")
+    plt.plot(observed_times, observed_values, label="Observed", marker="o")
     plt.xticks(rotation=45)
     plt.gca().xaxis.set_major_formatter(
-        plt.matplotlib.dates.DateFormatter("%Y-%m-%d %H:%M")
+        plt.matplotlib.dates.DateFormatter("%H:%M", tz=LOCAL_TZ)
     )
     plt.legend()
     plt.tight_layout()
@@ -116,18 +155,23 @@ def load_model():
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(DEVICE)
 
-    return model, config["feature_cols"], target_cols
+    return (
+        model,
+        config["feature_cols"],
+        target_cols,
+        config["target_col"],
+        config["lags"],
+    )
 
 
-def load_scaler(x, index=3):
+def inverse_scale_target(x, target_col: str):
     scaler: StandardScaler = joblib.load("data/std_scaler.joblib")
-    # scaler.inverse_transform
-    print(scaler.feature_names_in_[index])
+    index = list(scaler.feature_names_in_).index(target_col)  # type: ignore[attr-defined]
     x_original = x * scaler.scale_[index] + scaler.mean_[index]
     return x_original
 
 
 if __name__ == "__main__":
-    model, feature_cols, target_cols = load_model()
+    model, feature_cols, target_cols, target_col, lags = load_model()
     print(feature_cols)
-    predict(feature_cols, target_cols, model)
+    predict(feature_cols, target_col, lags, model)

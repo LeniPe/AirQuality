@@ -18,7 +18,7 @@ def main():
     ]
     measurements_feature_cols = ["temp", "feuchte", "windge", "no2"]
     spatial_feature_cols = ["station_code"]
-    lags = [1, 2]
+    lags = [1, 2, 3, 6, 12, 24]
     lag_feature_cols = []
     for lag in lags:
         lag_feature_cols += [f"{x}_lag{lag}" for x in measurements_feature_cols]
@@ -27,7 +27,7 @@ def main():
     target_col = "no2"
     forecast_horizon = 12
     target_cols = [f"target_{target_col}_lag{i + 1}" for i in range(forecast_horizon)]
-    num_epochs = 10
+    num_epochs = 20
 
     start, end = datetime(2025, 1, 1), datetime(2025, 12, 31)
     stations = select_stations(start=start, end=end)
@@ -54,6 +54,7 @@ def main():
 
     writer = SummaryWriter()
     config = {
+        "lags": lags,
         "feature_cols": selected_features,
         "target_col": target_col,
         "forecast_horizon": forecast_horizon,

@@ -11,6 +11,7 @@ from datetime import datetime
 from glob import glob
 import numpy as np
 import joblib
+from src.time_utils import to_local_timestamp, LOCAL_TZ
 
 
 def map_param_id_to_name(
@@ -85,31 +86,13 @@ def preprocess_measurements(
     if retrieve_new_measurements:
         retrieve_measurements(param_ids, stations, start, end)
 
-    file_list: list[pd.DataFrame] = []
-    for station in stations:
-        files = glob(f"data/raw/{station}_hourly_*.csv")
-        if len(files) == 0:
-            continue
-        for f in files:
-            df = pd.read_csv(
-                f, usecols=["timestamp"] + param_ids, dtype={"timestamp": int}
-            )
-            df = df.loc[
-                df.timestamp.between(int(start.timestamp()), int(end.timestamp()))
-            ]
-            df["station_id"] = station
-            file_list.append(df)
-
-    measurements_df = pd.concat(file_list, ignore_index=True)
-    measurements_df.rename(
-        columns=dict(
-            zip(param_ids, map_param_id_to_name(param_ids, name_type="nameInTable"))
-        ),
-        inplace=True,
+    measurements_df = prepare_base_measurements_df(
+        param_ids=param_ids,
+        stations=stations,
+        start=start,
+        end=end,
+        source_dir="data/raw",
     )
-
-    measurements_df = clean_and_resample(measurements_df)
-    measurements_df = add_temporal_features(measurements_df)
 
     train_df, val_df, test_df = train_test_split(
         measurements_df, validation_size=0.1, test_size=0.1
@@ -121,21 +104,34 @@ def preprocess_measurements(
         json.dump(station_to_int, f)
 
     train_df["station_code"] = station_codes
-    test_df["station_code"] = test_df["station_id"].map(station_to_int)
-    val_df["station_code"] = val_df["station_id"].map(station_to_int)
 
     scaler = StandardScaler()
     scaler.fit(train_df[param_names])
 
     joblib.dump(scaler, "data/std_scaler.joblib")
 
-    train_df[param_names] = scaler.transform(train_df[param_names])
-    test_df[param_names] = scaler.transform(test_df[param_names])
-    val_df[param_names] = scaler.transform(val_df[param_names])
-
-    train_df = add_lag_features(train_df,param_names,  lags)
-    test_df = add_lag_features(test_df, param_names, lags)
-    val_df = add_lag_features(val_df, param_names, lags)
+    train_df = apply_common_feature_engineering(
+        df=train_df,
+        param_names=param_names,
+        lags=lags,
+        scaler=scaler,
+        station_to_int=station_to_int,
+        map_station=False,
+    )
+    test_df = apply_common_feature_engineering(
+        df=test_df,
+        param_names=param_names,
+        lags=lags,
+        scaler=scaler,
+        station_to_int=station_to_int,
+    )
+    val_df = apply_common_feature_engineering(
+        df=val_df,
+        param_names=param_names,
+        lags=lags,
+        scaler=scaler,
+        station_to_int=station_to_int,
+    )
 
     train_df = add_target_features(
         df=train_df,
@@ -148,9 +144,7 @@ def preprocess_measurements(
         forecast_horizon=forecast_horizon,
     )
     val_df = add_target_features(
-        df=val_df,
-        target_col=target_col,
-        forecast_horizon=forecast_horizon
+        df=val_df, target_col=target_col, forecast_horizon=forecast_horizon
     )
 
     train_df.to_csv("data/processed/train.csv", index=False)
@@ -158,42 +152,147 @@ def preprocess_measurements(
     val_df.to_csv("data/processed/val.csv", index=False)
 
 
+def prepare_base_measurements_df(
+    param_ids: list[str],
+    stations: list[str],
+    start: datetime,
+    end: datetime,
+    source_dir: str,
+) -> pd.DataFrame:
+    file_list: list[pd.DataFrame] = []
+    for station in stations:
+        files = glob(f"{source_dir}/{station}_hourly_*.csv")
+        if len(files) == 0:
+            continue
+        for f in files:
+            try:
+                df = pd.read_csv(
+                    f, usecols=["timestamp"] + param_ids, dtype={"timestamp": int}
+                )
+            except ValueError as e:
+                print(f"Error reading {f}: {e}")
+                continue
+            start_ts = to_local_timestamp(start)
+            end_ts = to_local_timestamp(end)
+            df = df.loc[df.timestamp.between(start_ts, end_ts, inclusive="both")]
+            if df.empty:
+                continue
+            df["station_id"] = station
+            file_list.append(df)
+
+    if len(file_list) == 0:
+        return pd.DataFrame()
+
+    measurements_df = pd.concat(file_list, ignore_index=True)
+    measurements_df.rename(
+        columns=dict(
+            zip(param_ids, map_param_id_to_name(param_ids, name_type="nameInTable"))
+        ),
+        inplace=True,
+    )
+    measurements_df = clean_and_resample(measurements_df)
+    measurements_df = add_temporal_features(measurements_df)
+    return measurements_df
+
+
+def apply_common_feature_engineering(
+    df: pd.DataFrame,
+    param_names: list[str],
+    lags: list[int],
+    scaler: StandardScaler,
+    station_to_int: dict[str, int],
+    map_station: bool = True,
+) -> pd.DataFrame:
+    df = df.copy()
+    if map_station:
+        df["station_code"] = df["station_id"].map(station_to_int)
+
+    df = df[df["station_code"].notna()].copy()
+    df["station_code"] = df["station_code"].astype(int)
+
+    df[param_names] = scaler.transform(df[param_names])
+    df = add_lag_features(df, param_names, lags)
+    return df
+
+
+def preprocess_inference_measurements(
+    param_names: list[str],
+    station_id: str,
+    lags: list[int],
+    start: datetime,
+    end: datetime,
+    station_mapping_path: str = "data/station_mapping.json",
+    scaler_path: str = "data/std_scaler.joblib",
+    source_dir: str = "data/temp",
+) -> pd.DataFrame:
+    param_ids = map_param_name_to_id(param_names)
+    measurements_df = prepare_base_measurements_df(
+        param_ids=param_ids,
+        stations=[station_id],
+        start=start,
+        end=end,
+        source_dir=source_dir,
+    )
+    if measurements_df.empty:
+        return measurements_df
+
+    with open(station_mapping_path, "r") as f:
+        station_to_int = json.load(f)
+    scaler = joblib.load(scaler_path)
+
+    measurements_df = apply_common_feature_engineering(
+        df=measurements_df,
+        param_names=param_names,
+        lags=lags,
+        scaler=scaler,
+        station_to_int=station_to_int,
+    )
+    return measurements_df
+
+
 def select_stations(start: datetime, end: datetime) -> list[str]:
     stations_df = fetch_stations(force=False)
-    start = int(start.timestamp())
-    end = int(end.timestamp())
+    start_timestamp = to_local_timestamp(start)
+    end_timestamp = to_local_timestamp(end)
     stations_df = stations_df.loc[
         # (stations_df["Stationsumgebung"] == "städtisches Gebiet, Verkehr")
-        (stations_df["messung_von"] <= start)
-        & ((stations_df["messung_bis"] >= end) | (stations_df["messung_bis"].isna()))
+        (stations_df["messung_von"] <= start_timestamp)
+        & (
+            (stations_df["messung_bis"] >= end_timestamp)
+            | (stations_df["messung_bis"].isna())
+        )
     ]
     return stations_df["stationId"].astype(str).tolist()
 
 
-def add_lag_features(df: pd.DataFrame, param_names: list[str], lags: list[int]) -> pd.DataFrame:
+def add_lag_features(
+    df: pd.DataFrame, param_names: list[str], lags: list[int]
+) -> pd.DataFrame:
     df = df.sort_values(["station_id", "datetime"])
 
     for lag in lags:
         for param in param_names:
-            df[f"{param}_lag{lag}"] = df.groupby(
-                "station_id"
-            )[param].shift(lag)
+            df[f"{param}_lag{lag}"] = df.groupby("station_id")[param].shift(lag)
 
     df.dropna(inplace=True)
     return df
 
 
-def add_target_features(df: pd.DataFrame, target_col: str, forecast_horizon: int) -> pd.DataFrame:
+def add_target_features(
+    df: pd.DataFrame, target_col: str, forecast_horizon: int
+) -> pd.DataFrame:
     df = df.sort_values(["station_id", "datetime"])
     for i in range(forecast_horizon):
-        df[f"target_{target_col}_lag{i + 1}"] = df.groupby(
-            "station_id"
-        )[target_col].shift(-i)
+        df[f"target_{target_col}_lag{i + 1}"] = df.groupby("station_id")[
+            target_col
+        ].shift(-i)
     df.dropna(inplace=True)
     return df
 
 
-def retrieve_measurements(param_ids, stations, start, end):
+def retrieve_measurements(
+    param_ids: list[str], stations: list[str], start: datetime, end: datetime
+) -> None:
     for station in stations:
         available_param_ids, available_value_types = fetch_station_details(station)
         if not set(param_ids).issubset(set(available_param_ids)):
@@ -225,9 +324,12 @@ def encode_cyclic_features(x: pd.Series, name: str, measurements_df: pd.DataFram
 
     return measurements_df
 
+
 def clean_and_resample(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates()
-    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s")
+    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.tz_convert(
+        LOCAL_TZ
+    )
     df = (
         df.set_index("datetime")
         .groupby("station_id")
@@ -237,14 +339,11 @@ def clean_and_resample(df: pd.DataFrame) -> pd.DataFrame:
     )
     return df
 
+
 def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     df["day_of_week"] = df["datetime"].dt.day_of_week / 6
 
-    df = encode_cyclic_features(
-        df["datetime"].dt.hour, "hour", df
-    )
-    df = encode_cyclic_features(
-        df["datetime"].dt.dayofyear, "doy", df
-    )
+    df = encode_cyclic_features(df["datetime"].dt.hour, "hour", df)
+    df = encode_cyclic_features(df["datetime"].dt.dayofyear, "doy", df)
 
     return df
