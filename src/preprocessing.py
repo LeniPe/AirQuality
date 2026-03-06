@@ -159,37 +159,44 @@ def prepare_base_measurements_df(
     end: datetime,
     source_dir: str,
 ) -> pd.DataFrame:
+    
+    start_ts = to_local_timestamp(start)
+    end_ts = to_local_timestamp(end)
     file_list: list[pd.DataFrame] = []
     for station in stations:
-        files = glob(f"{source_dir}/{station}_hourly_*.csv")
-        if len(files) == 0:
+        print(f"Processing station {station}...")
+        station_dfs = []
+        for param_id in param_ids:
+            files = glob(f"{source_dir}/{station}_hourly_param{param_id}*.csv")
+            if len(files) == 0:
+                continue
+            param_dfs: list[pd.DataFrame] = []
+            for f in files:
+                df0 = pd.read_csv(f, index_col="timestamp")
+                param_dfs.append(df0)
+            df_param = pd.concat(param_dfs, axis=0)
+            df_param = df_param.groupby(df_param.index).mean(skipna=True)
+            station_dfs.append(df_param)
+        if len(station_dfs) == 0:
             continue
-        for f in files:
-            try:
-                df = pd.read_csv(
-                    f, usecols=["timestamp"] + param_ids, dtype={"timestamp": int}
-                )
-            except ValueError as e:
-                print(f"Error reading {f}: {e}")
-                continue
-            start_ts = to_local_timestamp(start)
-            end_ts = to_local_timestamp(end)
-            df = df.loc[df.timestamp.between(start_ts, end_ts, inclusive="both")]
-            if df.empty:
-                continue
-            df["station_id"] = station
-            file_list.append(df)
+        df = pd.concat(station_dfs, axis=1, join = "outer")
+        df = df.loc[df.index.to_series().between(start_ts, end_ts, inclusive="both")]
+        if df.empty:
+            continue
+        df["station_id"] = station
+        file_list.append(df)
 
     if len(file_list) == 0:
         return pd.DataFrame()
 
-    measurements_df = pd.concat(file_list, ignore_index=True)
+    measurements_df = pd.concat(file_list, ignore_index=False)
     measurements_df.rename(
         columns=dict(
             zip(param_ids, map_param_id_to_name(param_ids, name_type="nameInTable"))
         ),
         inplace=True,
     )
+    measurements_df = measurements_df.reset_index().rename(columns={"index": "timestamp"})
     measurements_df = clean_and_resample(measurements_df)
     measurements_df = add_temporal_features(measurements_df)
     return measurements_df
