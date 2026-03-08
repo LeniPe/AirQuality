@@ -33,14 +33,14 @@ def predict(
     requested_dt = to_local_datetime(
         datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
     )
-    history_hours = max(max(lags), 24)
+    history_hours = max(max(lags), 24) + 1
     scaler: StandardScaler = joblib.load("data/std_scaler.joblib")
     param_names = list(scaler.feature_names_in_)  # type: ignore[attr-defined]
     param_ids = map_param_name_to_id(param_names)
 
     print(requested_dt, requested_dt - datetime.timedelta(hours=history_hours))
     print(history_hours)
-    return
+ 
 
     os.makedirs("data/temp", exist_ok=True)
     fetch_hourly_measurements(

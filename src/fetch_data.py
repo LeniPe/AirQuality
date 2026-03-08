@@ -20,7 +20,6 @@ def fetch_hourly_measurements(
 
     start_timestamp = to_local_timestamp(start)
     end_timestamp = to_local_timestamp(end)
-    param_ids_str = ",".join(param_ids)
 
     limit = 60 * 60 * 1000
     print(
@@ -29,28 +28,31 @@ def fetch_hourly_measurements(
 
     while start_timestamp < end_timestamp:
         chunk_end = min(start_timestamp + limit, end_timestamp)
-        if persist:
-            filename = f"data/raw/{station_id}_hourly_{start_timestamp}_{chunk_end}.csv"
-        else:
-            filename = (
-                f"data/temp/{station_id}_hourly_{start_timestamp}_{chunk_end}.csv"
+        for param_id in param_ids:
+            if persist:
+                filename = f"data/raw/{station_id}_hourly_param{param_id}_{start_timestamp}_{chunk_end}.csv"
+            else:
+                filename = (
+                    f"data/temp/{station_id}_hourly_param{param_id}_{start_timestamp}_{chunk_end}.csv"
+                )
+            if not force and os.path.exists(filename):
+                print(f"File {filename} already exists, skipping...")
+
+                continue
+
+            r = requests.get(
+                f"{url}/json/lmw/getStationTableData/{station_id}/{param_id}/{start_timestamp}/{chunk_end}?valueType=2"
             )
-        if not force and os.path.exists(filename):
-            print(f"File {filename} already exists, skipping...")
-            start_timestamp = chunk_end
-            continue
+            r.raise_for_status()
 
-        r = requests.get(
-            f"{url}/json/lmw/getStationTableData/{station_id}/{param_ids_str}/{start_timestamp}/{chunk_end}?valueType=2"
-        )
-        r.raise_for_status()
-
-        data = r.json()["data"]
-        df = pd.DataFrame.from_dict(data, orient="index").dropna()
-        if len(df) > 0:
-            df.to_csv(filename, index=True, index_label="timestamp")
+            data = r.json()["data"]
+            df = pd.DataFrame.from_dict(data, orient="index").dropna()
+            if len(df) > 0:
+                df.to_csv(filename, index=True, index_label="timestamp")
+            sleep(1)
+        
         start_timestamp = chunk_end
-        sleep(1)
+
     return
 
 
