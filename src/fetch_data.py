@@ -37,7 +37,7 @@ def fetch_hourly_measurements(
                 )
             if not force and os.path.exists(filename):
                 print(f"File {filename} already exists, skipping...")
-                start_timestamp = chunk_end
+
                 continue
 
             r = requests.get(

@@ -342,6 +342,7 @@ def clean_and_resample(df: pd.DataFrame) -> pd.DataFrame:
         .groupby("station_id")
         .resample("1h")
         .mean()
+        .groupby(level="station_id")
         .ffill(limit=3)
         .reset_index()
     )
