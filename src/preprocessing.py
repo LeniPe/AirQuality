@@ -322,9 +322,8 @@ def retrieve_measurements(
         )
 
 
-def encode_cyclic_features(x: pd.Series, name: str, measurements_df: pd.DataFrame):
+def encode_cyclic_features(x: pd.Series, name: str, measurements_df: pd.DataFrame, max_value: float) -> pd.DataFrame:
 
-    max_value = x.max()
     measurements_df[f"{name}_sin"] = np.sin(2 * np.pi * x / max_value)
 
     measurements_df[f"{name}_cos"] = np.cos(2 * np.pi * x / max_value)
@@ -352,7 +351,7 @@ def clean_and_resample(df: pd.DataFrame) -> pd.DataFrame:
 def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     df["day_of_week"] = df["datetime"].dt.day_of_week / 6
 
-    df = encode_cyclic_features(df["datetime"].dt.hour, "hour", df)
-    df = encode_cyclic_features(df["datetime"].dt.dayofyear, "doy", df)
+    df = encode_cyclic_features(df["datetime"].dt.hour, "hour", df, 24)
+    df = encode_cyclic_features(df["datetime"].dt.dayofyear, "doy", df, 365)
 
     return df
