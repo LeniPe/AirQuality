@@ -22,25 +22,26 @@ STATION_MAP_PATH = Path("data/station_mapping.json")
 OUTPUT_PATH = Path("output/predictions.png")
 
 
-def predict(
+def predict_series(
     feature_cols: list[str],
     target_col: str,
     lags: list[int],
     model: SimpleRegressor,
-    station_id: str = "0104",
-    datetime_str: str = "2026-03-05 08:00:00",
-):
-    requested_dt = to_local_datetime(
-        datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
-    )
+    station_id: str,
+    requested_dt: datetime.datetime,
+    parameter: str = "NO2",
+) -> tuple[list[datetime.datetime], np.ndarray, list[tuple[datetime.datetime, float]]]:
+    parameter_name = parameter.strip().lower()
+    if parameter_name != target_col.lower():
+        raise ValueError(
+            f"Unsupported parameter '{parameter}'. This model supports '{target_col.upper()}' only."
+        )
+
+    requested_dt = to_local_datetime(requested_dt)
     history_hours = max(max(lags), 24) + 1
     scaler: StandardScaler = joblib.load("data/std_scaler.joblib")
     param_names = list(scaler.feature_names_in_)  # type: ignore[attr-defined]
     param_ids = map_param_name_to_id(param_names)
-
-    print(requested_dt, requested_dt - datetime.timedelta(hours=history_hours))
-    print(history_hours)
- 
 
     os.makedirs("data/temp", exist_ok=True)
     fetch_hourly_measurements(
@@ -60,9 +61,9 @@ def predict(
         end=requested_dt,
         source_dir="data/temp",
     )
+    print(df.datetime.min(), df.datetime.max())  # Debug: print datetime range of the data
     if df.empty:
-        print("No processed inference data available.")
-        return
+        raise ValueError("No processed inference data available.")
 
     df["datetime"] = pd.to_datetime(df["datetime"], utc=True).dt.tz_convert(
         requested_dt.tzinfo
@@ -72,10 +73,11 @@ def predict(
     df.reset_index(drop=True, inplace=True)
 
     if df.empty:
-        print(f"No data found for {datetime_str}")
-        return
-    model.eval()
+        raise ValueError(
+            f"No data found for station_id='{station_id}' at '{requested_dt.isoformat()}'"
+        )
 
+    model.eval()
     row = df.iloc[0]
     X = (
         torch.tensor(row[feature_cols].values.astype(np.float32), dtype=torch.float32)
@@ -89,11 +91,13 @@ def predict(
 
     forecast_horizon = pred.shape[1]
     pred_times = [
-        requested_dt + datetime.timedelta(hours=i) for i in range(forecast_horizon)
+        requested_dt + datetime.timedelta(hours=i + 1)
+        for i in range(forecast_horizon)
     ]
-    print(pred_times)
 
     pred = inverse_scale_target(pred, target_col=target_col)
+    pred_values = pred[0].detach().cpu().numpy().astype(float)
+
     observed_points: list[tuple[datetime.datetime, float]] = []
     for lag in sorted(lags, reverse=True):
         lag_feature = f"{target_col}_lag{lag}"
@@ -112,9 +116,33 @@ def predict(
             + ", ".join([f"{target_col}_lag{lag}" for lag in lags])
         )
 
+    return pred_times, pred_values, observed_points
+
+
+def predict(
+    feature_cols: list[str],
+    target_col: str,
+    lags: list[int],
+    model: SimpleRegressor,
+    station_id: str = "0104",
+    datetime_str: str = "2026-03-05 08:00:00",
+):
+    requested_dt = to_local_datetime(
+        datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
+    )
+    pred_times, pred_values, observed_points = predict_series(
+        feature_cols=feature_cols,
+        target_col=target_col,
+        lags=lags,
+        model=model,
+        station_id=station_id,
+        requested_dt=requested_dt,
+        parameter=target_col,
+    )
+
     observed_times = [t for t, _ in observed_points]
     observed_values = [v for _, v in observed_points]
-    plot_predictions(pred_times, pred[0].numpy(), observed_times, observed_values)
+    plot_predictions(pred_times, pred_values, observed_times, observed_values)
 
 
 def plot_predictions(pred_times, pred, observed_times, observed_values):

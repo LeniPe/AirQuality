@@ -1,0 +1,189 @@
+:root {
+  --bg-primary: #fafeff;
+  --bg-secondary: #b6cfff;
+  --surface: rgba(255, 252, 244, 0.84);
+  --surface-strong: #fffdf7;
+  --text: #1f1a12;
+  --text-muted: #5e5344;
+  --accent: #5c91fa;
+  --accent-strong: #0b6b59;
+  --border: rgba(89, 72, 49, 0.2);
+  --ring: rgba(15, 138, 115, 0.35);
+  --radius-lg: 22px;
+  --radius-md: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  color: var(--text);
+  font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+  background:
+    linear-gradient(180deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+}
+
+#react-entry-point > div {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  margin-top: 0;
+  margin-bottom: 0;
+  animation: lift-in 520ms ease-out both;
+}
+
+h1 {
+  margin: 0 0 10px;
+  font-family: "Avenir Next", "Segoe UI", "Trebuchet MS", sans-serif;
+  font-size: clamp(1.9rem, 3.2vw, 2.8rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  color: #172238;
+  text-wrap: balance;
+}
+
+h1::after {
+  content: "";
+  display: block;
+  width: 72px;
+  height: 4px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #8ab0ff);
+}
+
+p {
+  margin-top: 0;
+  margin-bottom: 22px;
+  color: var(--text-muted);
+  font-size: 0.98rem;
+}
+
+label {
+  display: inline-block;
+  margin-bottom: 8px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #4f4537;
+}
+
+input[type="text"],
+input[type="number"],
+textarea {
+  width: 100%;
+  padding: 11px 12px;
+  font-size: 0.97rem;
+  color: var(--text);
+  background: var(--bg-primary);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--ring);
+}
+
+#parameter .Select-control {
+  background: var(--bg-primary);
+  min-height: 42px;
+}
+
+#parameter.is-focused .Select-control,
+#parameter .is-focused:not(.is-open) > .Select-control,
+#parameter .Select-control:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--ring);
+}
+
+#predict-btn {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 18px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  color: #f3fffb;
+  background: var(--accent);
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+}
+
+#predict-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 11px 24px rgba(17, 107, 122, 0.4);
+  filter: saturate(1.04);
+}
+
+#predict-btn:active {
+  transform: translateY(0);
+}
+
+#predict-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(232, 216, 176, 0.9), 0 0 0 7px var(--accent);
+}
+
+hr {
+  margin: 20px 0 16px;
+  border: 0;
+  border-top: 1px dashed rgba(89, 72, 49, 0.38);
+}
+
+#status {
+  background: var(--bg-primary);
+  border: 1px solid rgba(89, 72, 49, 0.28);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  color: #3f372b;
+  line-height: 1.45;
+}
+
+#forecast-graph {
+  margin-top: 10px;
+  border: 1px solid rgba(89, 72, 49, 0.22);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  #react-entry-point > div {
+    margin: 14px;
+    padding: 18px;
+  }
+}
+
+@media (max-width: 700px) {
+  #react-entry-point > div > div {
+    grid-template-columns: 1fr !important;
+  }
+
+  #predict-btn {
+    width: 100%;
+  }
+}
+
+@keyframes lift-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
