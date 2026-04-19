@@ -10,7 +10,7 @@ import torch
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
-from src.model import SimpleRegressor
+from src.model import SimpleRegressor, QuantileRegressor
 from src.fetch_data import fetch_hourly_measurements
 from src.preprocessing import preprocess_inference_measurements, map_param_name_to_id
 from src.time_utils import to_local_datetime, LOCAL_TZ
@@ -61,7 +61,6 @@ def predict_series(
         end=requested_dt,
         source_dir="data/temp",
     )
-    print(df.datetime.min(), df.datetime.max())  # Debug: print datetime range of the data
     if df.empty:
         raise ValueError("No processed inference data available.")
 
@@ -171,14 +170,24 @@ def load_model():
     config = checkpoint["config"]
     forecast_horizon = config["forecast_horizon"]
     target_col = config["target_col"]
+    model_type = config.get("model_type", "simple")
 
     target_cols = [f"target_{target_col}_lag{i + 1}" for i in range(forecast_horizon)]
 
-    model = SimpleRegressor(
-        num_features=len(config["feature_cols"]),
-        forecast_horizon=forecast_horizon,
-        num_stations=len(station_mapping),
-    )
+    if model_type == "simple":
+        model = SimpleRegressor(
+            num_features=len(config["feature_cols"]),
+            forecast_horizon=forecast_horizon,
+            num_stations=len(station_mapping),
+        )
+    elif model_type == "quantile":
+        model = QuantileRegressor(
+            num_features=len(config["feature_cols"]),
+            forecast_horizon=forecast_horizon,
+            num_stations=len(station_mapping),
+        )
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
 
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(DEVICE)
@@ -189,6 +198,7 @@ def load_model():
         target_cols,
         config["target_col"],
         config["lags"],
+        model_type,
     )
 
 
@@ -200,6 +210,6 @@ def inverse_scale_target(x, target_col: str):
 
 
 if __name__ == "__main__":
-    model, feature_cols, target_cols, target_col, lags = load_model()
+    model, feature_cols, target_cols, target_col, lags, model_type = load_model()
     print(feature_cols)
     predict(feature_cols, target_col, lags, model)

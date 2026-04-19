@@ -1,10 +1,11 @@
 import json
-from typing import Optional
+from typing import Literal, Optional
 import pandas as pd
 from src.dataset import TabularTimeSeriesDataset
 from torch.utils.data import DataLoader
 import torch
-from src.model import SimpleRegressor
+from src.losses import PinballLoss
+from src.model import QuantileRegressor, SimpleRegressor
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 
@@ -71,6 +72,8 @@ def train_model(
     target_cols,
     num_epochs: int = 20,
     writer: Optional[SummaryWriter] = None,
+    model_type: Literal["simple", "quantile"] = "simple",
+    quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
 ):
     df = pd.read_csv("data/processed/train.csv", dtype={"station_id": str}).reset_index(
         drop=True
@@ -86,19 +89,33 @@ def train_model(
     )
 
     num_stations = json.load(open("data/station_mapping.json", "r"))
-    model = SimpleRegressor(
-        num_features=len(feature_cols),
-        num_stations=len(num_stations),
-        embedding_dim=8,
-        forecast_horizon=len(target_cols),
-    ).to("cpu")
+    if model_type == "simple":
+        model = SimpleRegressor(
+            num_features=len(feature_cols),
+            num_stations=len(num_stations),
+            embedding_dim=8,
+            forecast_horizon=len(target_cols),
+        ).to("cpu")
+        criterion = nn.MSELoss()
+    elif model_type == "quantile":
+        model = QuantileRegressor(
+            num_features=len(feature_cols),
+            num_stations=len(num_stations),
+            embedding_dim=8,
+            forecast_horizon=len(target_cols),
+            quantiles=quantiles,
+        ).to("cpu")
+        criterion = PinballLoss(quantiles=quantiles)
+    else:
+        raise ValueError(
+            f"Unsupported model_type '{model_type}'. Use 'simple' or 'quantile'."
+        )
 
     if writer is not None:
         dummy_x = torch.randn(1, len(feature_cols)).to("cpu")
         dummy_station = torch.zeros(1, dtype=torch.long).to("cpu")
         writer.add_graph(model, (dummy_x, dummy_station))
 
-    criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     for epoch in range(num_epochs):

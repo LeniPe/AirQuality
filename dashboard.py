@@ -127,6 +127,31 @@ def run_prediction(
         )
     )
 
+    if "lower_quantile_predictions" in payload and payload["lower_quantile_predictions"]:
+        x_lower = [p["datetime"] for p in payload["lower_quantile_predictions"]]
+        y_lower = [float(p["value"]) for p in payload["lower_quantile_predictions"]]
+        fig.add_trace(
+            go.Scatter(
+                x=x_lower,
+                y=y_lower,
+                mode="lines",
+                name="Lower Quantile",
+                line=dict(dash="dash", color="red"),
+            )
+        )
+    if "upper_quantile_predictions" in payload and payload["upper_quantile_predictions"]:
+        x_upper = [p["datetime"] for p in payload["upper_quantile_predictions"]]
+        y_upper = [float(p["value"]) for p in payload["upper_quantile_predictions"]]
+        fig.add_trace(
+            go.Scatter(
+                x=x_upper,
+                y=y_upper,
+                mode="lines",
+                name="Upper Quantile",
+                line=dict(dash="dash", color="red"),
+            )
+        )
+
     status = (
         f"Station: {payload['station_id']}\n"
         f"Parameter: {payload['parameter']}\n"

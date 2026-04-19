@@ -6,6 +6,11 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import torch
 
+# Hyperparameters and configuration
+num_epochs = 100
+model_type = "quantile"  # "simple" or "quantile"
+target_col = "no2"
+forecast_horizon = 12
 
 def main():
 
@@ -24,11 +29,8 @@ def main():
         lag_feature_cols += [f"{x}_lag{lag}" for x in measurements_feature_cols]
     feature_cols = temporal_feature_cols + spatial_feature_cols + lag_feature_cols
     print(f"Using features: {feature_cols}")
-    target_col = "no2"
-    forecast_horizon = 12
-    target_cols = [f"target_{target_col}_lag{i + 1}" for i in range(forecast_horizon)]
-    num_epochs = 20
 
+    target_cols = [f"target_{target_col}_lag{i + 1}" for i in range(forecast_horizon)]
     start, end = datetime(2025, 1, 1), datetime(2025, 12, 31)
     stations = select_stations(start=start, end=end)
     print(f"Selected {len(stations)} stations.")
@@ -59,6 +61,7 @@ def main():
         "target_col": target_col,
         "forecast_horizon": forecast_horizon,
         "num_epochs": num_epochs,
+        "model_type": model_type,
     }
     writer.add_hparams(
         {"hparam/forecast_horizon": forecast_horizon, "hparam/num_epochs": num_epochs},
@@ -71,6 +74,7 @@ def main():
         target_cols=target_cols,
         writer=writer,
         num_epochs=num_epochs,
+        model_type=model_type,
     )
 
     checkpoint = {
