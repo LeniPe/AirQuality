@@ -7,10 +7,11 @@ from datetime import datetime
 import torch
 
 # Hyperparameters and configuration
-num_epochs = 100
+num_epochs = 10
 model_type = "quantile"  # "simple" or "quantile"
 target_col = "no2"
 forecast_horizon = 12
+lr = 1e-3
 
 def main():
 
@@ -63,18 +64,27 @@ def main():
         "num_epochs": num_epochs,
         "model_type": model_type,
     }
-    writer.add_hparams(
-        {"hparam/forecast_horizon": forecast_horizon, "hparam/num_epochs": num_epochs},
-        {"metric/mse": 0},
-    )
+
     writer.add_text("config", json.dumps(config, indent=4))
 
-    model = train_model(
+    model, val_loss = train_model(
         feature_cols=selected_features,
         target_cols=target_cols,
         writer=writer,
         num_epochs=num_epochs,
         model_type=model_type,
+        lr=lr,
+    )
+
+    writer.add_hparams(
+        {
+            "hparam/forecast_horizon": forecast_horizon, 
+            "hparam/num_epochs": num_epochs,
+            "hparam/lr": lr,
+        },
+        {
+            "metric/val_loss": val_loss,
+        },
     )
 
     checkpoint = {
