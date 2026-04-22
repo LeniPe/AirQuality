@@ -86,12 +86,19 @@ def preprocess_measurements(
     if retrieve_new_measurements:
         retrieve_measurements(param_ids, stations, start, end)
 
-    measurements_df = prepare_base_measurements_df(
+    raw_measurements_df = _load_base_measurements_df(
         param_ids=param_ids,
         stations=stations,
         start=start,
         end=end,
         source_dir="data/raw",
+    )
+
+    measurements_df = prepare_base_measurements_df(
+        param_ids=param_ids,
+        start=start,
+        end=end,
+        measurements_df=raw_measurements_df,
     )
 
     train_df, val_df, test_df = train_test_split(
@@ -152,13 +159,17 @@ def preprocess_measurements(
     val_df.to_csv("data/processed/val.csv", index=False)
 
 
-def prepare_base_measurements_df(
+def _load_base_measurements_df(
     param_ids: list[str],
     stations: list[str],
     start: datetime,
     end: datetime,
     source_dir: str,
+    measurements_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+
+    if measurements_df is not None:
+        return measurements_df.copy()
 
     periods = pd.period_range(start=start, end=end, freq="M")
     years = sorted({period.year for period in periods})
@@ -167,7 +178,7 @@ def prepare_base_measurements_df(
     parquet_root = f"{source_dir}/parquet"
     if not os.path.exists(parquet_root):
         return pd.DataFrame()
-    
+
     filters = [
         ("station_id", "in", stations),
         ("param_id", "in", [str(param_id) for param_id in param_ids]),
@@ -192,7 +203,7 @@ def prepare_base_measurements_df(
     measurements_long["timestamp"] = measurements_long["timestamp"].astype("int64")
     measurements_long["value"] = measurements_long["value"].astype("float64")
 
-    measurements_df = (
+    filtered_measurements = (
         measurements_long.pivot_table(
             index=["timestamp", "station_id"],
             columns="param_id",
@@ -202,20 +213,36 @@ def prepare_base_measurements_df(
         .reset_index()
         .rename_axis(None, axis=1)
     )
+    return filtered_measurements
 
-    measurements_df = measurements_df[
-        (measurements_df["timestamp"] >= to_local_timestamp(start))
-        & (measurements_df["timestamp"] <= to_local_timestamp(end))
+
+def prepare_base_measurements_df(
+    param_ids: list[str],
+    start: datetime,
+    end: datetime,
+    measurements_df: pd.DataFrame,
+) -> pd.DataFrame:
+
+    filtered_measurements = measurements_df.copy()
+    if filtered_measurements.empty:
+        return pd.DataFrame()
+
+    filtered_measurements = filtered_measurements[
+        (filtered_measurements["timestamp"] >= to_local_timestamp(start))
+        & (filtered_measurements["timestamp"] <= to_local_timestamp(end))
     ].copy()
-    measurements_df.rename(
+    if filtered_measurements.empty:
+        return pd.DataFrame()
+
+    filtered_measurements.rename(
         columns=dict(
             zip([str(param_id) for param_id in param_ids], map_param_id_to_name(param_ids, name_type="nameInTable"))
         ),
         inplace=True,
     )
-    measurements_df = clean_and_resample(measurements_df)
-    measurements_df = add_temporal_features(measurements_df)
-    return measurements_df
+    filtered_measurements = clean_and_resample(filtered_measurements)
+    filtered_measurements = add_temporal_features(filtered_measurements)
+    return filtered_measurements
 
 
 def apply_common_feature_engineering(
@@ -247,14 +274,24 @@ def preprocess_inference_measurements(
     station_mapping_path: str = "data/station_mapping.json",
     scaler_path: str = "data/std_scaler.joblib",
     source_dir: str = "data/temp",
+    measurements_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     param_ids = map_param_name_to_id(param_names)
-    measurements_df = prepare_base_measurements_df(
+
+    raw_measurements_df = _load_base_measurements_df(
         param_ids=param_ids,
         stations=[station_id],
         start=start,
         end=end,
         source_dir=source_dir,
+        measurements_df=measurements_df,
+    )
+
+    measurements_df = prepare_base_measurements_df(
+        param_ids=param_ids,
+        start=start,
+        end=end,
+        measurements_df=raw_measurements_df,
     )
     if measurements_df.empty:
         return measurements_df

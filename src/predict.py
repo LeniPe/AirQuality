@@ -4,14 +4,13 @@ from pathlib import Path
 import numpy as np
 import joblib
 import pandas as pd
-import os
 
 import torch
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
 from src.model import SimpleRegressor, QuantileRegressor
-from src.fetch_data import fetch_hourly_measurements
+from src.fetch_data import fetch_hourly_measurements_on_the_fly
 from src.preprocessing import preprocess_inference_measurements, map_param_name_to_id
 from src.time_utils import to_local_datetime, LOCAL_TZ
 
@@ -43,14 +42,11 @@ def predict_series(
     param_names = list(scaler.feature_names_in_)  # type: ignore[attr-defined]
     param_ids = map_param_name_to_id(param_names)
 
-    os.makedirs("data/temp", exist_ok=True)
-    fetch_hourly_measurements(
+    raw_measurements = fetch_hourly_measurements_on_the_fly(
         station_id=station_id,
         start=requested_dt - datetime.timedelta(hours=history_hours),
         end=requested_dt,
         param_ids=param_ids,
-        force=True,
-        persist=False,
     )
 
     df = preprocess_inference_measurements(
@@ -59,7 +55,7 @@ def predict_series(
         lags=lags,
         start=requested_dt - datetime.timedelta(hours=history_hours),
         end=requested_dt,
-        source_dir="data/temp",
+        measurements_df=raw_measurements,
     )
     if df.empty:
         raise ValueError("No processed inference data available.")

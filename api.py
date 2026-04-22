@@ -4,7 +4,7 @@ from functools import lru_cache
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from src.fetch_data import fetch_hourly_measurements
+from src.fetch_data import fetch_hourly_measurements_on_the_fly
 from src.predict import load_model, predict_series
 from src.preprocessing import map_param_name_to_id
 from src.time_utils import to_local_datetime
@@ -119,13 +119,11 @@ def observations_endpoint(
             status_code=400, detail=f"Unsupported parameter '{parameter}'"
         )
 
-    df = fetch_hourly_measurements(
+    df = fetch_hourly_measurements_on_the_fly(
         station_id=station_id,
         start=start,
         end=end,
         param_ids=[param_id],
-        force=False,
-        persist=False,
     )
     if df.empty:
         return ObservationsResponse(

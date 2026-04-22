@@ -140,29 +140,6 @@ def _extract_long_measurements(df: pd.DataFrame, param_id: str) -> pd.DataFrame:
     return _enforce_measurement_schema(values)
 
 
-def _read_cached_parquet_chunk(
-    parquet_root: str,
-    station_id: str,
-    param_id: str,
-    year: int,
-    month: int,
-) -> pd.DataFrame:
-    if not os.path.exists(parquet_root):
-        return pd.DataFrame(columns=["timestamp", "station_id", "param_id", "value"])
-
-    filters = [
-        ("station_id", "==", station_id),
-        ("param_id", "==", str(param_id)),
-        ("year", "==", year),
-        ("month", "==", month),
-    ]
-    try:
-        cached = pd.read_parquet(parquet_root, filters=filters)
-        return _enforce_measurement_schema(cached)
-    except (FileNotFoundError, ValueError, OSError):
-        return pd.DataFrame(columns=["timestamp", "station_id", "param_id", "value"])
-
-
 def _append_to_parquet_dataset(parquet_root: str, long_df: pd.DataFrame) -> None:
     if long_df.empty:
         return
@@ -174,6 +151,25 @@ def _append_to_parquet_dataset(parquet_root: str, long_df: pd.DataFrame) -> None
         partition_cols=["year", "month"],
         engine="pyarrow",
     )
+
+
+def _pivot_measurements_for_return(measurements: pd.DataFrame) -> pd.DataFrame:
+    if measurements.empty:
+        return pd.DataFrame()
+
+    normalized = _enforce_measurement_schema(measurements)
+    pivoted = (
+        normalized.pivot_table(
+            index=["timestamp", "station_id"],
+            columns="param_id",
+            values="value",
+            aggfunc="mean",
+        )
+        .reset_index()
+        .rename_axis(None, axis=1)
+    )
+    pivoted["timestamp"] = pivoted["timestamp"].astype("int64")
+    return pivoted
 
 
 def _request_hourly_measurements(
@@ -200,8 +196,7 @@ def _fetch_hourly_measurements_monthly(
     end_month: int,
     param_ids: list[str],
     force: bool = False,
-    persist: bool = True,
-) -> pd.DataFrame:
+)-> None:
     """
     Fetch hourly measurements for a station across monthly periods.
     
@@ -213,18 +208,15 @@ def _fetch_hourly_measurements_monthly(
         end_month: End month (1-12)
         param_ids: List of parameter IDs
         force: Force re-download even if files exist
-        persist: Save to data/raw or data/temp
     """
     print(
         f"Fetching hourly measurements for station {station_id} from {start_year}-{start_month:02d} to {end_year}-{end_month:02d}..."
     )
 
-    base_dir = "data/raw" if persist else "data/temp"
+    base_dir = "data/raw"
     parquet_root = _parquet_root(base_dir)
     manifest_path = _manifest_path(base_dir)
     _ensure_manifest_table(manifest_path)
-
-    all_data = []
     
     # Iterate through each month in the range
     current = date(start_year, start_month, 1)
@@ -250,15 +242,6 @@ def _fetch_hourly_measurements_monthly(
             if not force and _is_chunk_complete(
                 manifest_path, station_id, str(param_id), year, month
             ):
-                cached_df = _read_cached_parquet_chunk(
-                    parquet_root=parquet_root,
-                    station_id=station_id,
-                    param_id=str(param_id),
-                    year=year,
-                    month=month,
-                )
-                if len(cached_df) > 0:
-                    all_data.append(cached_df)
                 continue
 
             month_str = f"{year}_{month:02d}"
@@ -287,7 +270,6 @@ def _fetch_hourly_measurements_monthly(
                     month=month,
                     row_count=len(long_df),
                 )
-                all_data.append(long_df.drop(columns=["year", "month"]))
                 print(
                     f"Saved {len(long_df)} records for station={station_id}, "
                     f"param={param_id}, month={month_str}"
@@ -307,10 +289,42 @@ def _fetch_hourly_measurements_monthly(
         
         # Move to next month
         current += relativedelta(months=1)
+    return
 
-    if all_data:
-        return pd.concat(all_data, ignore_index=True)
-    return pd.DataFrame()
+
+def fetch_hourly_measurements_on_the_fly(
+    station_id: str,
+    start: datetime,
+    end: datetime,
+    param_ids: list[str],
+) -> pd.DataFrame:
+    """
+    Fetch measurements directly from the API without persisting to local storage.
+
+    This path is intended for prediction/inference-time queries and therefore
+    uses the exact requested interval instead of monthly chunking.
+    """
+    start_timestamp = to_local_timestamp(start)
+    end_timestamp = to_local_timestamp(end)
+
+    all_data: list[pd.DataFrame] = []
+    for param_id in param_ids:
+        df = _request_hourly_measurements(
+            station_id=station_id,
+            param_id=param_id,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+        )
+        long_df = _extract_long_measurements(df, str(param_id))
+        if len(long_df) == 0:
+            continue
+        long_df["station_id"] = station_id
+        all_data.append(long_df[["timestamp", "station_id", "param_id", "value"]])
+        sleep(1)
+
+    if len(all_data) == 0:
+        return pd.DataFrame()
+    return _pivot_measurements_for_return(pd.concat(all_data, ignore_index=True))
 
 
 def fetch_hourly_measurements(
@@ -323,8 +337,7 @@ def fetch_hourly_measurements(
     end_year: int = None,
     end_month: int = None,
     force: bool = False,
-    persist: bool = True,
-) -> pd.DataFrame:
+) -> None:
     """
     Fetch hourly measurements for a station.
     
@@ -342,7 +355,6 @@ def fetch_hourly_measurements(
         end_year: End year (monthly interface)
         end_month: End month (1-12) (monthly interface)
         force: Force re-download even if files exist
-        persist: Save to data/raw or data/temp
     """
     # Determine which interface is being used
     if start is not None and end is not None:
@@ -365,7 +377,6 @@ def fetch_hourly_measurements(
         end_month=end_month,
         param_ids=param_ids,
         force=force,
-        persist=persist,
     )
 
 
