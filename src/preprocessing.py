@@ -1,4 +1,5 @@
 import json
+import os
 import pandas as pd
 from src.fetch_data import (
     fetch_hourly_measurements,
@@ -159,48 +160,59 @@ def prepare_base_measurements_df(
     source_dir: str,
 ) -> pd.DataFrame:
 
-    start_ts = to_local_timestamp(start)
-    end_ts = to_local_timestamp(end)
-    monthly_periods = pd.period_range(start=start, end=end, freq="M")
-    file_list: list[pd.DataFrame] = []
-    for station in stations:
-        print(f"Processing station {station}...")
-        station_dfs = []
-        for param_id in param_ids:
-            files = [
-                f"{source_dir}/{station}_hourly_param_{param_id}_{period.year}_{period.month:02d}.csv"
-                for period in monthly_periods
-            ]
-            existing_files = [path for path in files if pd.io.common.file_exists(path)]
-            if len(existing_files) == 0:
-                continue
-            param_dfs: list[pd.DataFrame] = []
-            for f in existing_files:
-                df0 = pd.read_csv(f, index_col="timestamp")
-                param_dfs.append(df0)
-            df_param = pd.concat(param_dfs, axis=0)
-            df_param = df_param.groupby(df_param.index).mean(skipna=True)
-            station_dfs.append(df_param)
-        if len(station_dfs) == 0:
-            continue
-        df = pd.concat(station_dfs, axis=1, join = "outer")
-        df = df.loc[df.index.to_series().between(start_ts, end_ts, inclusive="both")]
-        if df.empty:
-            continue
-        df["station_id"] = station
-        file_list.append(df)
+    periods = pd.period_range(start=start, end=end, freq="M")
+    years = sorted({period.year for period in periods})
+    months = sorted({period.month for period in periods})
 
-    if len(file_list) == 0:
+    parquet_root = f"{source_dir}/parquet"
+    if not os.path.exists(parquet_root):
+        return pd.DataFrame()
+    
+    filters = [
+        ("station_id", "in", stations),
+        ("param_id", "in", [str(param_id) for param_id in param_ids]),
+        ("year", "in", years),
+        ("month", "in", months),
+    ]
+    try:
+        measurements_long = pd.read_parquet(parquet_root, filters=filters)
+    except (FileNotFoundError, ValueError, OSError):
+        measurements_long = pd.DataFrame()
+
+    if measurements_long.empty:
         return pd.DataFrame()
 
-    measurements_df = pd.concat(file_list, ignore_index=False)
+    measurements_long["timestamp"] = pd.to_numeric(
+        measurements_long["timestamp"], errors="coerce"
+    )
+    measurements_long["value"] = pd.to_numeric(
+        measurements_long["value"], errors="coerce"
+    )
+    measurements_long = measurements_long.dropna(subset=["timestamp", "value"])
+    measurements_long["timestamp"] = measurements_long["timestamp"].astype("int64")
+    measurements_long["value"] = measurements_long["value"].astype("float64")
+
+    measurements_df = (
+        measurements_long.pivot_table(
+            index=["timestamp", "station_id"],
+            columns="param_id",
+            values="value",
+            aggfunc="mean",
+        )
+        .reset_index()
+        .rename_axis(None, axis=1)
+    )
+
+    measurements_df = measurements_df[
+        (measurements_df["timestamp"] >= to_local_timestamp(start))
+        & (measurements_df["timestamp"] <= to_local_timestamp(end))
+    ].copy()
     measurements_df.rename(
         columns=dict(
-            zip(param_ids, map_param_id_to_name(param_ids, name_type="nameInTable"))
+            zip([str(param_id) for param_id in param_ids], map_param_id_to_name(param_ids, name_type="nameInTable"))
         ),
         inplace=True,
     )
-    measurements_df = measurements_df.reset_index().rename(columns={"index": "timestamp"})
     measurements_df = clean_and_resample(measurements_df)
     measurements_df = add_temporal_features(measurements_df)
     return measurements_df

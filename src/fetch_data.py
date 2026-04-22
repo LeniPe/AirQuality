@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from time import sleep
 import requests
 from datetime import datetime, date
@@ -6,6 +7,173 @@ from dateutil.relativedelta import relativedelta
 import pandas as pd
 import os
 from src.time_utils import to_local_timestamp
+
+
+MEASUREMENT_SCHEMA: dict[str, str] = {
+    "timestamp": "int64",
+    "station_id": "string",
+    "param_id": "string",
+    "value": "float64",
+    "year": "int64",
+    "month": "int64",
+}
+
+
+def _enforce_measurement_schema(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    normalized = df.copy()
+
+    if "timestamp" in normalized.columns:
+        normalized["timestamp"] = pd.to_numeric(normalized["timestamp"], errors="coerce")
+    if "value" in normalized.columns:
+        normalized["value"] = pd.to_numeric(normalized["value"], errors="coerce")
+    if "year" in normalized.columns:
+        normalized["year"] = pd.to_numeric(normalized["year"], errors="coerce")
+    if "month" in normalized.columns:
+        normalized["month"] = pd.to_numeric(normalized["month"], errors="coerce")
+
+    required_numeric = [
+        col for col in ["timestamp", "value", "year", "month"] if col in normalized.columns
+    ]
+    if len(required_numeric) > 0:
+        normalized = normalized.dropna(subset=required_numeric)
+
+    for col, dtype in MEASUREMENT_SCHEMA.items():
+        if col not in normalized.columns:
+            continue
+        if dtype == "string":
+            normalized[col] = normalized[col].astype(str)
+        else:
+            normalized[col] = normalized[col].astype(dtype)
+
+    return normalized
+
+
+def _manifest_path(base_dir: str) -> str:
+    return os.path.join(base_dir, "chunk_manifest.sqlite")
+
+
+def _parquet_root(base_dir: str) -> str:
+    return os.path.join(base_dir, "parquet")
+
+
+def _ensure_manifest_table(manifest_path: str) -> None:
+    os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+    with sqlite3.connect(manifest_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chunk_manifest (
+                station_id TEXT NOT NULL,
+                param_id TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                row_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (station_id, param_id, year, month)
+            )
+            """
+        )
+
+
+def _is_chunk_complete(
+    manifest_path: str,
+    station_id: str,
+    param_id: str,
+    year: int,
+    month: int,
+) -> bool:
+    with sqlite3.connect(manifest_path) as connection:
+        row = connection.execute(
+            """
+            SELECT status
+            FROM chunk_manifest
+            WHERE station_id = ? AND param_id = ? AND year = ? AND month = ?
+            """,
+            (station_id, param_id, year, month),
+        ).fetchone()
+    return row is not None and row[0] == "complete"
+
+
+def _update_manifest_chunk(
+    manifest_path: str,
+    station_id: str,
+    param_id: str,
+    year: int,
+    month: int,
+    row_count: int,
+    status: str = "complete",
+) -> None:
+    updated_at = datetime.utcnow().isoformat(timespec="seconds")
+    with sqlite3.connect(manifest_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO chunk_manifest (
+                station_id, param_id, year, month, status, row_count, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(station_id, param_id, year, month) DO UPDATE SET
+                status = excluded.status,
+                row_count = excluded.row_count,
+                updated_at = excluded.updated_at
+            """,
+            (station_id, param_id, year, month, status, row_count, updated_at),
+        )
+
+
+def _extract_long_measurements(df: pd.DataFrame, param_id: str) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=["timestamp", "param_id", "value"])
+
+    result_df = df.reset_index(names="timestamp")
+    value_column = param_id if param_id in result_df.columns else None
+    if value_column is None:
+        candidate_columns = [col for col in result_df.columns if col != "timestamp"]
+        if len(candidate_columns) == 0:
+            return pd.DataFrame(columns=["timestamp", "param_id", "value"])
+        value_column = candidate_columns[0]
+
+    values = result_df[["timestamp", value_column]].rename(columns={value_column: "value"})
+    values["param_id"] = str(param_id)
+    values = values[["timestamp", "param_id", "value"]]
+    return _enforce_measurement_schema(values)
+
+
+def _read_cached_parquet_chunk(
+    parquet_root: str,
+    station_id: str,
+    param_id: str,
+    year: int,
+    month: int,
+) -> pd.DataFrame:
+    if not os.path.exists(parquet_root):
+        return pd.DataFrame(columns=["timestamp", "station_id", "param_id", "value"])
+
+    filters = [
+        ("station_id", "==", station_id),
+        ("param_id", "==", str(param_id)),
+        ("year", "==", year),
+        ("month", "==", month),
+    ]
+    try:
+        cached = pd.read_parquet(parquet_root, filters=filters)
+        return _enforce_measurement_schema(cached)
+    except (FileNotFoundError, ValueError, OSError):
+        return pd.DataFrame(columns=["timestamp", "station_id", "param_id", "value"])
+
+
+def _append_to_parquet_dataset(parquet_root: str, long_df: pd.DataFrame) -> None:
+    if long_df.empty:
+        return
+    os.makedirs(parquet_root, exist_ok=True)
+    long_df = _enforce_measurement_schema(long_df)
+    long_df.to_parquet(
+        parquet_root,
+        index=False,
+        partition_cols=["year", "month"],
+        engine="pyarrow",
+    )
 
 
 def _request_hourly_measurements(
@@ -51,6 +219,11 @@ def _fetch_hourly_measurements_monthly(
         f"Fetching hourly measurements for station {station_id} from {start_year}-{start_month:02d} to {end_year}-{end_month:02d}..."
     )
 
+    base_dir = "data/raw" if persist else "data/temp"
+    parquet_root = _parquet_root(base_dir)
+    manifest_path = _manifest_path(base_dir)
+    _ensure_manifest_table(manifest_path)
+
     all_data = []
     
     # Iterate through each month in the range
@@ -74,37 +247,62 @@ def _fetch_hourly_measurements_monthly(
         
         # Fetch data for each parameter in this month
         for param_id in param_ids:
-            month_str = f"{year}_{month:02d}"
-            filename = (
-                f"data/raw/{station_id}_hourly_param_{param_id}_{month_str}.csv"
-                if persist
-                else f"data/temp/{station_id}_hourly_param_{param_id}_{month_str}.csv"
-            )
-            
-            # Check if file already exists
-            if not force and os.path.exists(filename):
-                print(f"File {filename} already exists, loading...")
-                cached_df = pd.read_csv(filename)
+            if not force and _is_chunk_complete(
+                manifest_path, station_id, str(param_id), year, month
+            ):
+                cached_df = _read_cached_parquet_chunk(
+                    parquet_root=parquet_root,
+                    station_id=station_id,
+                    param_id=str(param_id),
+                    year=year,
+                    month=month,
+                )
                 if len(cached_df) > 0:
                     all_data.append(cached_df)
                 continue
 
+            month_str = f"{year}_{month:02d}"
             df = _request_hourly_measurements(
                 station_id=station_id,
                 param_id=param_id,
                 start_timestamp=start_timestamp,
                 end_timestamp=end_timestamp,
             )
-            
-            if len(df) > 0:
-                result_df = df.reset_index(names="timestamp")
-                all_data.append(result_df)
-                os.makedirs(os.path.dirname(filename), exist_ok=True)
-                result_df.to_csv(filename, index=False)
-                print(f"Saved {len(result_df)} records to {filename}")
+            long_df = _extract_long_measurements(df, str(param_id))
+
+            if len(long_df) > 0:
+                long_df["station_id"] = station_id
+                long_df["year"] = year
+                long_df["month"] = month
+                long_df = long_df[
+                    ["timestamp", "station_id", "param_id", "value", "year", "month"]
+                ]
+                long_df = _enforce_measurement_schema(long_df)
+                _append_to_parquet_dataset(parquet_root, long_df)
+                _update_manifest_chunk(
+                    manifest_path=manifest_path,
+                    station_id=station_id,
+                    param_id=str(param_id),
+                    year=year,
+                    month=month,
+                    row_count=len(long_df),
+                )
+                all_data.append(long_df.drop(columns=["year", "month"]))
+                print(
+                    f"Saved {len(long_df)} records for station={station_id}, "
+                    f"param={param_id}, month={month_str}"
+                )
             else:
-                print(f"No data available for {month_str}")
-            
+                _update_manifest_chunk(
+                    manifest_path=manifest_path,
+                    station_id=station_id,
+                    param_id=str(param_id),
+                    year=year,
+                    month=month,
+                    row_count=0,
+                )
+                print(f"No data available for {month_str}, param_id={param_id}")
+
             sleep(1)
         
         # Move to next month
