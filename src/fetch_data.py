@@ -188,6 +188,21 @@ def _request_hourly_measurements(
     return pd.DataFrame.from_dict(data, orient="index").dropna()
 
 
+def _get_station_measurement_window(station_id: str) -> tuple[int | None, int | None]:
+    stations_df = fetch_stations(force=False)
+    station_rows = stations_df.loc[stations_df["stationId"].astype(str) == str(station_id)]
+    if station_rows.empty:
+        return None, None
+
+    station_row = station_rows.iloc[0]
+    station_start = pd.to_numeric(station_row.get("messung_von"), errors="coerce")
+    station_end = pd.to_numeric(station_row.get("messung_bis"), errors="coerce")
+
+    start_timestamp = int(station_start) if pd.notna(station_start) else None
+    end_timestamp = int(station_end) if pd.notna(station_end) else None
+    return start_timestamp, end_timestamp
+
+
 def _fetch_hourly_measurements_monthly(
     station_id: str,
     start_year: int,
@@ -196,6 +211,8 @@ def _fetch_hourly_measurements_monthly(
     end_month: int,
     param_ids: list[str],
     force: bool = False,
+    clip_start_timestamp: int | None = None,
+    clip_end_timestamp: int | None = None,
 )-> None:
     """
     Fetch hourly measurements for a station across monthly periods.
@@ -236,6 +253,14 @@ def _fetch_hourly_measurements_monthly(
         
         start_timestamp = to_local_timestamp(start_datetime)
         end_timestamp = to_local_timestamp(end_datetime)
+
+        if clip_start_timestamp is not None:
+            start_timestamp = max(start_timestamp, clip_start_timestamp)
+        if clip_end_timestamp is not None:
+            end_timestamp = min(end_timestamp, clip_end_timestamp)
+        if start_timestamp > end_timestamp:
+            current += relativedelta(months=1)
+            continue
         
         # Fetch data for each parameter in this month
         for param_id in param_ids:
@@ -368,6 +393,29 @@ def fetch_hourly_measurements(
             "Either provide (start, end) datetime objects or "
             "(start_year, start_month, end_year, end_month) for monthly interface"
         )
+
+    requested_start_timestamp = to_local_timestamp(
+        datetime.combine(date(start_year, start_month, 1), datetime.min.time())
+    )
+    requested_end_timestamp = to_local_timestamp(
+        datetime.combine(
+            date(end_year, end_month, 1) + relativedelta(months=1) - relativedelta(days=1),
+            datetime.max.time(),
+        )
+    )
+
+    station_start_timestamp, station_end_timestamp = _get_station_measurement_window(
+        station_id
+    )
+    if station_start_timestamp is not None:
+        requested_start_timestamp = max(requested_start_timestamp, station_start_timestamp)
+    if station_end_timestamp is not None:
+        requested_end_timestamp = min(requested_end_timestamp, station_end_timestamp)
+    if requested_start_timestamp > requested_end_timestamp:
+        print(
+            f"Skipping station {station_id}: requested period does not overlap station measurement window."
+        )
+        return
     
     return _fetch_hourly_measurements_monthly(
         station_id=station_id,
@@ -377,6 +425,8 @@ def fetch_hourly_measurements(
         end_month=end_month,
         param_ids=param_ids,
         force=force,
+        clip_start_timestamp=requested_start_timestamp,
+        clip_end_timestamp=requested_end_timestamp,
     )
 
 
@@ -418,7 +468,6 @@ def fetch_stations(force=False) -> pd.DataFrame:
             "messung_bis",
         ]
     ]
-    print(stations.head())
     stations.to_csv(filename, index=False)
     return stations
 

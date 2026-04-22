@@ -311,14 +311,13 @@ def preprocess_inference_measurements(
 
 
 def select_stations(start: datetime, end: datetime) -> list[str]:
-    stations_df = fetch_stations(force=False)
+    stations_df = fetch_stations(force=True)
     start_timestamp = to_local_timestamp(start)
     end_timestamp = to_local_timestamp(end)
     stations_df = stations_df.loc[
-        # (stations_df["Stationsumgebung"] == "städtisches Gebiet, Verkehr")
-        (stations_df["messung_von"] <= start_timestamp)
+        (stations_df["messung_von"] <= end_timestamp)
         & (
-            (stations_df["messung_bis"] >= end_timestamp)
+            (stations_df["messung_bis"] >= start_timestamp)
             | (stations_df["messung_bis"].isna())
         )
     ]
