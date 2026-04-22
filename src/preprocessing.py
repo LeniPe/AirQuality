@@ -8,7 +8,6 @@ from src.fetch_data import (
 )
 from sklearn.preprocessing import StandardScaler
 from datetime import datetime
-from glob import glob
 import numpy as np
 import joblib
 from src.time_utils import to_local_timestamp, LOCAL_TZ
@@ -159,19 +158,24 @@ def prepare_base_measurements_df(
     end: datetime,
     source_dir: str,
 ) -> pd.DataFrame:
-    
+
     start_ts = to_local_timestamp(start)
     end_ts = to_local_timestamp(end)
+    monthly_periods = pd.period_range(start=start, end=end, freq="M")
     file_list: list[pd.DataFrame] = []
     for station in stations:
         print(f"Processing station {station}...")
         station_dfs = []
         for param_id in param_ids:
-            files = glob(f"{source_dir}/{station}_hourly_param{param_id}*.csv")
-            if len(files) == 0:
+            files = [
+                f"{source_dir}/{station}_hourly_param_{param_id}_{period.year}_{period.month:02d}.csv"
+                for period in monthly_periods
+            ]
+            existing_files = [path for path in files if pd.io.common.file_exists(path)]
+            if len(existing_files) == 0:
                 continue
             param_dfs: list[pd.DataFrame] = []
-            for f in files:
+            for f in existing_files:
                 df0 = pd.read_csv(f, index_col="timestamp")
                 param_dfs.append(df0)
             df_param = pd.concat(param_dfs, axis=0)
@@ -314,10 +318,12 @@ def retrieve_measurements(
 
         print(f"Fetching data for station {station}...")
         fetch_hourly_measurements(
-            station,
-            start,
-            end,
-            param_ids,
+            station_id=station,
+            start_year=start.year,
+            start_month=start.month,
+            end_year=end.year,
+            end_month=end.month,
+            param_ids=param_ids,
             force=False,
         )
 
