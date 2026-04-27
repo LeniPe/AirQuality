@@ -4,7 +4,6 @@ from pathlib import Path
 import numpy as np
 import joblib
 import pandas as pd
-import os
 
 import torch
 import matplotlib.pyplot as plt
