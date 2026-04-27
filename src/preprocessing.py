@@ -1,4 +1,5 @@
 import json
+import os
 import pandas as pd
 from src.fetch_data import (
     fetch_hourly_measurements,
@@ -8,7 +9,6 @@ from src.fetch_data import (
 )
 from sklearn.preprocessing import StandardScaler
 from datetime import datetime
-from glob import glob
 import numpy as np
 import joblib
 from src.time_utils import to_local_timestamp, LOCAL_TZ
@@ -86,12 +86,19 @@ def preprocess_measurements(
     if retrieve_new_measurements:
         retrieve_measurements(param_ids, stations, start, end)
 
-    measurements_df = prepare_base_measurements_df(
+    raw_measurements_df = _load_base_measurements_df(
         param_ids=param_ids,
         stations=stations,
         start=start,
         end=end,
         source_dir="data/raw",
+    )
+
+    measurements_df = prepare_base_measurements_df(
+        param_ids=param_ids,
+        start=start,
+        end=end,
+        measurements_df=raw_measurements_df,
     )
 
     train_df, val_df, test_df = train_test_split(
@@ -152,54 +159,90 @@ def preprocess_measurements(
     val_df.to_csv("data/processed/val.csv", index=False)
 
 
-def prepare_base_measurements_df(
+def _load_base_measurements_df(
     param_ids: list[str],
     stations: list[str],
     start: datetime,
     end: datetime,
     source_dir: str,
+    measurements_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    
-    start_ts = to_local_timestamp(start)
-    end_ts = to_local_timestamp(end)
-    file_list: list[pd.DataFrame] = []
-    for station in stations:
-        print(f"Processing station {station}...")
-        station_dfs = []
-        for param_id in param_ids:
-            files = glob(f"{source_dir}/{station}_hourly_param{param_id}*.csv")
-            if len(files) == 0:
-                continue
-            param_dfs: list[pd.DataFrame] = []
-            for f in files:
-                df0 = pd.read_csv(f, index_col="timestamp")
-                param_dfs.append(df0)
-            df_param = pd.concat(param_dfs, axis=0)
-            df_param = df_param.groupby(df_param.index).mean(skipna=True)
-            station_dfs.append(df_param)
-        if len(station_dfs) == 0:
-            continue
-        df = pd.concat(station_dfs, axis=1, join = "outer")
-        df = df.loc[df.index.to_series().between(start_ts, end_ts, inclusive="both")]
-        if df.empty:
-            continue
-        df["station_id"] = station
-        file_list.append(df)
 
-    if len(file_list) == 0:
+    if measurements_df is not None:
+        return measurements_df.copy()
+
+    periods = pd.period_range(start=start, end=end, freq="M")
+    years = sorted({period.year for period in periods})
+    months = sorted({period.month for period in periods})
+
+    parquet_root = f"{source_dir}/parquet"
+    if not os.path.exists(parquet_root):
         return pd.DataFrame()
 
-    measurements_df = pd.concat(file_list, ignore_index=False)
-    measurements_df.rename(
+    filters = [
+        ("station_id", "in", stations),
+        ("param_id", "in", [str(param_id) for param_id in param_ids]),
+        ("year", "in", years),
+        ("month", "in", months),
+    ]
+    try:
+        measurements_long = pd.read_parquet(parquet_root, filters=filters)
+    except (FileNotFoundError, ValueError, OSError):
+        measurements_long = pd.DataFrame()
+
+    if measurements_long.empty:
+        return pd.DataFrame()
+
+    measurements_long["timestamp"] = pd.to_numeric(
+        measurements_long["timestamp"], errors="coerce"
+    )
+    measurements_long["value"] = pd.to_numeric(
+        measurements_long["value"], errors="coerce"
+    )
+    measurements_long = measurements_long.dropna(subset=["timestamp", "value"])
+    measurements_long["timestamp"] = measurements_long["timestamp"].astype("int64")
+    measurements_long["value"] = measurements_long["value"].astype("float64")
+
+    filtered_measurements = (
+        measurements_long.pivot_table(
+            index=["timestamp", "station_id"],
+            columns="param_id",
+            values="value",
+            aggfunc="mean",
+        )
+        .reset_index()
+        .rename_axis(None, axis=1)
+    )
+    return filtered_measurements
+
+
+def prepare_base_measurements_df(
+    param_ids: list[str],
+    start: datetime,
+    end: datetime,
+    measurements_df: pd.DataFrame,
+) -> pd.DataFrame:
+
+    filtered_measurements = measurements_df.copy()
+    if filtered_measurements.empty:
+        return pd.DataFrame()
+
+    filtered_measurements = filtered_measurements[
+        (filtered_measurements["timestamp"] >= to_local_timestamp(start))
+        & (filtered_measurements["timestamp"] <= to_local_timestamp(end))
+    ].copy()
+    if filtered_measurements.empty:
+        return pd.DataFrame()
+
+    filtered_measurements.rename(
         columns=dict(
-            zip(param_ids, map_param_id_to_name(param_ids, name_type="nameInTable"))
+            zip([str(param_id) for param_id in param_ids], map_param_id_to_name(param_ids, name_type="nameInTable"))
         ),
         inplace=True,
     )
-    measurements_df = measurements_df.reset_index().rename(columns={"index": "timestamp"})
-    measurements_df = clean_and_resample(measurements_df)
-    measurements_df = add_temporal_features(measurements_df)
-    return measurements_df
+    filtered_measurements = clean_and_resample(filtered_measurements)
+    filtered_measurements = add_temporal_features(filtered_measurements)
+    return filtered_measurements
 
 
 def apply_common_feature_engineering(
@@ -231,14 +274,24 @@ def preprocess_inference_measurements(
     station_mapping_path: str = "data/station_mapping.json",
     scaler_path: str = "data/std_scaler.joblib",
     source_dir: str = "data/temp",
+    measurements_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     param_ids = map_param_name_to_id(param_names)
-    measurements_df = prepare_base_measurements_df(
+
+    raw_measurements_df = _load_base_measurements_df(
         param_ids=param_ids,
         stations=[station_id],
         start=start,
         end=end,
         source_dir=source_dir,
+        measurements_df=measurements_df,
+    )
+
+    measurements_df = prepare_base_measurements_df(
+        param_ids=param_ids,
+        start=start,
+        end=end,
+        measurements_df=raw_measurements_df,
     )
     if measurements_df.empty:
         return measurements_df
@@ -258,14 +311,13 @@ def preprocess_inference_measurements(
 
 
 def select_stations(start: datetime, end: datetime) -> list[str]:
-    stations_df = fetch_stations(force=False)
+    stations_df = fetch_stations(force=True)
     start_timestamp = to_local_timestamp(start)
     end_timestamp = to_local_timestamp(end)
     stations_df = stations_df.loc[
-        # (stations_df["Stationsumgebung"] == "städtisches Gebiet, Verkehr")
-        (stations_df["messung_von"] <= start_timestamp)
+        (stations_df["messung_von"] <= end_timestamp)
         & (
-            (stations_df["messung_bis"] >= end_timestamp)
+            (stations_df["messung_bis"] >= start_timestamp)
             | (stations_df["messung_bis"].isna())
         )
     ]
@@ -314,10 +366,12 @@ def retrieve_measurements(
 
         print(f"Fetching data for station {station}...")
         fetch_hourly_measurements(
-            station,
-            start,
-            end,
-            param_ids,
+            station_id=station,
+            start_year=start.year,
+            start_month=start.month,
+            end_year=end.year,
+            end_month=end.month,
+            param_ids=param_ids,
             force=False,
         )
 

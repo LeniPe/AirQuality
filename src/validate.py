@@ -7,6 +7,26 @@ from torch.utils.data import DataLoader
 import torch
 
 
+def _select_point_predictions(pred: torch.Tensor, model) -> torch.Tensor:
+    if pred.ndim == 2:
+        return pred
+
+    if pred.ndim != 3:
+        raise ValueError(
+            "Unsupported prediction shape. Expected [batch, horizon] or [batch, horizon, quantiles]."
+        )
+
+    # For quantile models, use median quantile as point forecast for MSE metrics.
+    quantiles = getattr(model, "quantiles", None)
+    if quantiles is None:
+        median_idx = pred.shape[2] // 2
+        return pred[:, :, median_idx]
+
+    q_tensor = quantiles.detach().cpu().to(dtype=pred.dtype)
+    median_idx = int(torch.argmin(torch.abs(q_tensor - 0.5)).item())
+    return pred[:, :, median_idx]
+
+
 def validate(feature_cols, target_cols, model):
     test_df = pd.read_csv("data/processed/test.csv", dtype={"station_id": str})
 
@@ -34,6 +54,7 @@ def validate(feature_cols, target_cols, model):
             if y.ndim == 1:
                 y = y.unsqueeze(1)
             pred = model(X, station_code)
+            pred = _select_point_predictions(pred, model)
             y_preds.append(pred.cpu().numpy())
             y_trues.append(y.cpu().numpy())
 

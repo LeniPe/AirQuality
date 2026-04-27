@@ -1,10 +1,11 @@
 import json
-from typing import Optional
+from typing import Literal, Optional
 import pandas as pd
 from src.dataset import TabularTimeSeriesDataset
 from torch.utils.data import DataLoader
 import torch
-from src.model import SimpleRegressor
+from src.losses import PinballLoss
+from src.model import QuantileRegressor, SimpleRegressor
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 
@@ -71,7 +72,12 @@ def train_model(
     target_cols,
     num_epochs: int = 20,
     writer: Optional[SummaryWriter] = None,
-):
+    model_type: Literal["simple", "quantile"] = "simple",
+    quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
+    batch_size: int = 256,
+    device = "cpu",
+    lr: float = 1e-3,
+) -> tuple[torch.nn.Module, float]:
     df = pd.read_csv("data/processed/train.csv", dtype={"station_id": str}).reset_index(
         drop=True
     )
@@ -82,31 +88,56 @@ def train_model(
     )
 
     train_loader = DataLoader(
-        train_dataset, batch_size=256, shuffle=True, num_workers=2
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=2
     )
 
+    df_val = pd.read_csv("data/processed/val.csv", dtype={"station_id": str}).reset_index(
+        drop=True
+    )
+    val_dataset = TabularTimeSeriesDataset(
+        df_val,
+        feature_cols=feature_cols,
+        target_cols=target_cols,
+    )
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=2)
+
+
     num_stations = json.load(open("data/station_mapping.json", "r"))
-    model = SimpleRegressor(
-        num_features=len(feature_cols),
-        num_stations=len(num_stations),
-        embedding_dim=8,
-        forecast_horizon=len(target_cols),
-    ).to("cpu")
+    if model_type == "simple":
+        model = SimpleRegressor(
+            num_features=len(feature_cols),
+            num_stations=len(num_stations),
+            embedding_dim=8,
+            forecast_horizon=len(target_cols),
+        ).to(device)
+        criterion = nn.MSELoss()
+    elif model_type == "quantile":
+        model = QuantileRegressor(
+            num_features=len(feature_cols),
+            num_stations=len(num_stations),
+            embedding_dim=8,
+            forecast_horizon=len(target_cols),
+            quantiles=quantiles,
+        ).to(device)
+        criterion = PinballLoss(quantiles=quantiles)
+    else:
+        raise ValueError(
+            f"Unsupported model_type '{model_type}'. Use 'simple' or 'quantile'."
+        )
 
     if writer is not None:
-        dummy_x = torch.randn(1, len(feature_cols)).to("cpu")
-        dummy_station = torch.zeros(1, dtype=torch.long).to("cpu")
+        dummy_x = torch.randn(1, len(feature_cols)).to(device)
+        dummy_station = torch.zeros(1, dtype=torch.long).to(device)
         writer.add_graph(model, (dummy_x, dummy_station))
 
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0.0
 
         for X, station_code, y in train_loader:
-            X, station_code, y = X.to("cpu"), station_code.to("cpu"), y.to("cpu")
+            X, station_code, y = X.to(device), station_code.to(device), y.to(device)
             if y.ndim == 1:
                 y = y.unsqueeze(1)
             optimizer.zero_grad()
@@ -121,6 +152,41 @@ def train_model(
         if writer is not None:
             writer.add_scalar("Loss/train", avg_loss, epoch + 1)
 
+        # Validation
+        if writer is None:
+            continue
+        model.eval()
+        all_q_lower = []
+        all_q_mid = []
+        all_q_upper = []
+        all_y = []
+        with torch.no_grad():
+            for X, station_code, y in val_loader:
+                X, station_code, y = X.to(device), station_code.to(device), y.to(device)
+                if y.ndim == 1:
+                    y = y.unsqueeze(1)
+                pred = model(X, station_code)
+                all_q_lower.append(pred[:, :, 0])
+                all_q_mid.append(pred[:, :, 1])
+                all_q_upper.append(pred[:, :, 2])
+                all_y.append(y)
+        q_lower = torch.cat(all_q_lower, dim=0)
+        q_mid = torch.cat(all_q_mid, dim=0)
+        q_upper = torch.cat(all_q_upper, dim=0)
+        y   = torch.cat(all_y, dim=0)
+
+        interval_cov = (
+            (y >= q_lower) &
+            (y <= q_upper)
+        ).float().mean()
+        interval_width = (q_upper - q_lower).mean()
+        val_loss = criterion(torch.stack([q_lower, q_mid, q_upper], dim=-1), y)
+
+        writer.add_scalar("Loss/val", val_loss, epoch + 1)
+        writer.add_scalar("val/interval_coverage", interval_cov, epoch + 1)
+        writer.add_scalar("val/interval_width", interval_width, epoch + 1)
+
+
     if writer is not None:
         writer.flush()
-    return model
+    return model, val_loss

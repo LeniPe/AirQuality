@@ -4,7 +4,7 @@ from functools import lru_cache
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from src.fetch_data import fetch_hourly_measurements
+from src.fetch_data import fetch_hourly_measurements_on_the_fly
 from src.predict import load_model, predict_series
 from src.preprocessing import map_param_name_to_id
 from src.time_utils import to_local_datetime
@@ -21,6 +21,8 @@ class PredictionResponse(BaseModel):
     parameter: str
     horizon_hours: int
     predictions: list[ObservationPoint]
+    lower_quantile_predictions: list[ObservationPoint] | None = None
+    upper_quantile_predictions: list[ObservationPoint] | None = None
 
 
 class ObservationsResponse(BaseModel):
@@ -50,26 +52,34 @@ def predict_endpoint(
         minute=0, second=0, microsecond=0
     )
 
-    try:
-        model, feature_cols, _, target_col, lags = get_model_bundle()
-        pred_times, pred_values, _ = predict_series(
-            feature_cols=feature_cols,
-            target_col=target_col,
-            lags=lags,
-            model=model,
-            station_id=station_id,
-            requested_dt=requested_dt,
-            parameter=parameter,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="Prediction failed") from exc
+    model, feature_cols, _, target_col, lags, model_type = get_model_bundle()
+    pred_times, pred_values, _ = predict_series(
+        feature_cols=feature_cols,
+        target_col=target_col,
+        lags=lags,
+        model=model,
+        station_id=station_id,
+        requested_dt=requested_dt,
+        parameter=parameter,
+    )
 
     forecast_points = [
-        ObservationPoint(datetime=forecast_time, value=float(pred_value))
+        ObservationPoint(datetime=forecast_time, value=float(pred_value[1]))
         for forecast_time, pred_value in zip(pred_times, pred_values)
     ]
+    lower_quantile_points = None
+    upper_quantile_points = None
+
+    if model_type == "quantile":
+        lower_quantile_points = [
+            ObservationPoint(datetime=forecast_time, value=float(pred_value[0]))
+            for forecast_time, pred_value in zip(pred_times, pred_values)
+        ]
+
+        upper_quantile_points = [
+            ObservationPoint(datetime=forecast_time, value=float(pred_value[2]))
+            for forecast_time, pred_value in zip(pred_times, pred_values)
+        ]
 
     return PredictionResponse(
         station_id=station_id,
@@ -77,6 +87,8 @@ def predict_endpoint(
         parameter=target_col.upper(),
         horizon_hours=len(forecast_points),
         predictions=forecast_points,
+        lower_quantile_predictions=lower_quantile_points,
+        upper_quantile_predictions=upper_quantile_points,
     )
 
 
@@ -107,13 +119,11 @@ def observations_endpoint(
             status_code=400, detail=f"Unsupported parameter '{parameter}'"
         )
 
-    df = fetch_hourly_measurements(
+    df = fetch_hourly_measurements_on_the_fly(
         station_id=station_id,
         start=start,
         end=end,
         param_ids=[param_id],
-        force=False,
-        persist=False,
     )
     if df.empty:
         return ObservationsResponse(

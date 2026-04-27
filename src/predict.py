@@ -4,14 +4,13 @@ from pathlib import Path
 import numpy as np
 import joblib
 import pandas as pd
-import os
 
 import torch
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
-from src.model import SimpleRegressor
-from src.fetch_data import fetch_hourly_measurements
+from src.model import SimpleRegressor, QuantileRegressor
+from src.fetch_data import fetch_hourly_measurements_on_the_fly
 from src.preprocessing import preprocess_inference_measurements, map_param_name_to_id
 from src.time_utils import to_local_datetime, LOCAL_TZ
 
@@ -43,14 +42,11 @@ def predict_series(
     param_names = list(scaler.feature_names_in_)  # type: ignore[attr-defined]
     param_ids = map_param_name_to_id(param_names)
 
-    os.makedirs("data/temp", exist_ok=True)
-    fetch_hourly_measurements(
+    raw_measurements = fetch_hourly_measurements_on_the_fly(
         station_id=station_id,
         start=requested_dt - datetime.timedelta(hours=history_hours),
         end=requested_dt,
         param_ids=param_ids,
-        force=True,
-        persist=False,
     )
 
     df = preprocess_inference_measurements(
@@ -59,9 +55,8 @@ def predict_series(
         lags=lags,
         start=requested_dt - datetime.timedelta(hours=history_hours),
         end=requested_dt,
-        source_dir="data/temp",
+        measurements_df=raw_measurements,
     )
-    print(df.datetime.min(), df.datetime.max())  # Debug: print datetime range of the data
     if df.empty:
         raise ValueError("No processed inference data available.")
 
@@ -171,14 +166,24 @@ def load_model():
     config = checkpoint["config"]
     forecast_horizon = config["forecast_horizon"]
     target_col = config["target_col"]
+    model_type = config.get("model_type", "simple")
 
     target_cols = [f"target_{target_col}_lag{i + 1}" for i in range(forecast_horizon)]
 
-    model = SimpleRegressor(
-        num_features=len(config["feature_cols"]),
-        forecast_horizon=forecast_horizon,
-        num_stations=len(station_mapping),
-    )
+    if model_type == "simple":
+        model = SimpleRegressor(
+            num_features=len(config["feature_cols"]),
+            forecast_horizon=forecast_horizon,
+            num_stations=len(station_mapping),
+        )
+    elif model_type == "quantile":
+        model = QuantileRegressor(
+            num_features=len(config["feature_cols"]),
+            forecast_horizon=forecast_horizon,
+            num_stations=len(station_mapping),
+        )
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
 
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(DEVICE)
@@ -189,6 +194,7 @@ def load_model():
         target_cols,
         config["target_col"],
         config["lags"],
+        model_type,
     )
 
 
@@ -200,6 +206,6 @@ def inverse_scale_target(x, target_col: str):
 
 
 if __name__ == "__main__":
-    model, feature_cols, target_cols, target_col, lags = load_model()
+    model, feature_cols, target_cols, target_col, lags, model_type = load_model()
     print(feature_cols)
     predict(feature_cols, target_col, lags, model)
