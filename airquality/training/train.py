@@ -1,17 +1,17 @@
 import json
 from typing import Literal, Optional
 import pandas as pd
-from src.dataset import TabularTimeSeriesDataset
+from airquality.data.dataset import TabularTimeSeriesDataset
 from torch.utils.data import DataLoader
 import torch
-from src.losses import PinballLoss
-from src.model import QuantileRegressor, SimpleRegressor
+from airquality.models.regressor import SimpleRegressor, QuantileRegressor
+from airquality.models.losses import PinballLoss
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 
 
 def validate(feature_cols, target_cols, model, loss_fn, device="cpu"):
-    df = pd.read_csv("data/processed/val.csv", dtype={"station_id": str}).reset_index(
+    df = pd.read_csv("project_data/processed/val.csv", dtype={"station_id": str}).reset_index(
         drop=True
     )
     val_dataset = TabularTimeSeriesDataset(
@@ -78,7 +78,7 @@ def train_model(
     device = "cpu",
     lr: float = 1e-3,
 ) -> tuple[torch.nn.Module, float]:
-    df = pd.read_csv("data/processed/train.csv", dtype={"station_id": str}).reset_index(
+    df = pd.read_csv("project_data/processed/train.csv", dtype={"station_id": str}).reset_index(
         drop=True
     )
     train_dataset = TabularTimeSeriesDataset(
@@ -91,7 +91,7 @@ def train_model(
         train_dataset, batch_size=batch_size, shuffle=True, num_workers=2
     )
 
-    df_val = pd.read_csv("data/processed/val.csv", dtype={"station_id": str}).reset_index(
+    df_val = pd.read_csv("project_data/processed/val.csv", dtype={"station_id": str}).reset_index(
         drop=True
     )
     val_dataset = TabularTimeSeriesDataset(
@@ -102,7 +102,7 @@ def train_model(
     val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=2)
 
 
-    num_stations = json.load(open("data/station_mapping.json", "r"))
+    num_stations = json.load(open("project_data/station_mapping.json", "r"))
     if model_type == "simple":
         model = SimpleRegressor(
             num_features=len(feature_cols),

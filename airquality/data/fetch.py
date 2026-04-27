@@ -6,7 +6,7 @@ from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 import os
-from src.time_utils import to_local_timestamp
+from airquality.data.time_utils import to_local_timestamp
 
 
 MEASUREMENT_SCHEMA: dict[str, str] = {
@@ -230,7 +230,7 @@ def _fetch_hourly_measurements_monthly(
         f"Fetching hourly measurements for station {station_id} from {start_year}-{start_month:02d} to {end_year}-{end_month:02d}..."
     )
 
-    base_dir = "data/raw"
+    base_dir = "project_data/raw"
     parquet_root = _parquet_root(base_dir)
     manifest_path = _manifest_path(base_dir)
     _ensure_manifest_table(manifest_path)
@@ -431,7 +431,7 @@ def fetch_hourly_measurements(
 
 
 def fetch_parameters(force=False) -> pd.DataFrame:
-    filename = "data/parameters.csv"
+    filename = "project_data/parameters.csv"
     if not force and os.path.exists(filename):
         return pd.read_csv(filename)
 
@@ -445,7 +445,7 @@ def fetch_parameters(force=False) -> pd.DataFrame:
 
 
 def fetch_stations(force=False) -> pd.DataFrame:
-    filename = "data/stations.csv"
+    filename = "project_data/stations.csv"
     if not force and os.path.exists(filename):
         return pd.read_csv(filename)
 

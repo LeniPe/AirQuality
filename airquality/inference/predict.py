@@ -4,20 +4,21 @@ from pathlib import Path
 import numpy as np
 import joblib
 import pandas as pd
+import os
 
 import torch
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
-from src.model import SimpleRegressor, QuantileRegressor
-from src.fetch_data import fetch_hourly_measurements_on_the_fly
-from src.preprocessing import preprocess_inference_measurements, map_param_name_to_id
-from src.time_utils import to_local_datetime, LOCAL_TZ
+from airquality.models.regressor import SimpleRegressor, QuantileRegressor
+from airquality.data.fetch import fetch_hourly_measurements_on_the_fly
+from airquality.data.preprocessing import preprocess_inference_measurements, map_param_name_to_id
+from airquality.data.time_utils import to_local_datetime, LOCAL_TZ
 
 
 DEVICE = torch.device("cpu")
 CHECKPOINT_PATH = Path("output/model_checkpoint.pth")
-STATION_MAP_PATH = Path("data/station_mapping.json")
+STATION_MAP_PATH = Path("project_data/station_mapping.json")
 OUTPUT_PATH = Path("output/predictions.png")
 
 
@@ -38,7 +39,7 @@ def predict_series(
 
     requested_dt = to_local_datetime(requested_dt)
     history_hours = max(max(lags), 24) + 1
-    scaler: StandardScaler = joblib.load("data/std_scaler.joblib")
+    scaler: StandardScaler = joblib.load("project_data/std_scaler.joblib")
     param_names = list(scaler.feature_names_in_)  # type: ignore[attr-defined]
     param_ids = map_param_name_to_id(param_names)
 
@@ -199,13 +200,7 @@ def load_model():
 
 
 def inverse_scale_target(x, target_col: str):
-    scaler: StandardScaler = joblib.load("data/std_scaler.joblib")
+    scaler: StandardScaler = joblib.load("project_data/std_scaler.joblib")
     index = list(scaler.feature_names_in_).index(target_col)  # type: ignore[attr-defined]
     x_original = x * scaler.scale_[index] + scaler.mean_[index]
     return x_original
-
-
-if __name__ == "__main__":
-    model, feature_cols, target_cols, target_col, lags, model_type = load_model()
-    print(feature_cols)
-    predict(feature_cols, target_col, lags, model)

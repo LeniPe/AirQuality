@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_squared_error
 
-from src.dataset import TabularTimeSeriesDataset
+from airquality.data.dataset import TabularTimeSeriesDataset
 from torch.utils.data import DataLoader
 import torch
 
@@ -27,8 +27,8 @@ def _select_point_predictions(pred: torch.Tensor, model) -> torch.Tensor:
     return pred[:, :, median_idx]
 
 
-def validate(feature_cols, target_cols, model):
-    test_df = pd.read_csv("data/processed/test.csv", dtype={"station_id": str})
+def evaluate(feature_cols, target_cols, model):
+    test_df = pd.read_csv("project_data/processed/test.csv", dtype={"station_id": str})
 
     test_df.dropna(inplace=True)
     test_df = test_df[test_df["station_id"] == "0104"]

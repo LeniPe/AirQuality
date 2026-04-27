@@ -9,8 +9,7 @@ wheels/
 # Virtual environments
 .venv
 
-
-data/
+/project_data/
 output/
 runs/
 notebooks/

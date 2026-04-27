@@ -1,7 +1,7 @@
 import json
-from src.validate import validate
-from src.preprocessing import preprocess_measurements, select_stations
-from src.train import train_model, feature_selection
+from airquality.training.evaluate import evaluate as validate
+from airquality.data.preprocessing import preprocess_measurements, select_stations
+from airquality.training.train import train_model, feature_selection
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import torch

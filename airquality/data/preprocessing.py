@@ -1,7 +1,7 @@
 import json
 import os
 import pandas as pd
-from src.fetch_data import (
+from airquality.data.fetch import (
     fetch_hourly_measurements,
     fetch_parameters,
     fetch_station_details,
@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from datetime import datetime
 import numpy as np
 import joblib
-from src.time_utils import to_local_timestamp, LOCAL_TZ
+from airquality.data.time_utils import to_local_timestamp, LOCAL_TZ
 
 
 def map_param_id_to_name(
@@ -91,7 +91,7 @@ def preprocess_measurements(
         stations=stations,
         start=start,
         end=end,
-        source_dir="data/raw",
+        source_dir="project_data/raw",
     )
 
     measurements_df = prepare_base_measurements_df(
@@ -107,7 +107,7 @@ def preprocess_measurements(
 
     station_codes, station_index = pd.factorize(train_df["station_id"])
     station_to_int = {station: i for i, station in enumerate(station_index)}
-    with open("data/station_mapping.json", "w") as f:
+    with open("project_data/station_mapping.json", "w") as f:
         json.dump(station_to_int, f)
 
     train_df["station_code"] = station_codes
@@ -115,7 +115,7 @@ def preprocess_measurements(
     scaler = StandardScaler()
     scaler.fit(train_df[param_names])
 
-    joblib.dump(scaler, "data/std_scaler.joblib")
+    joblib.dump(scaler, "project_data/std_scaler.joblib")
 
     train_df = apply_common_feature_engineering(
         df=train_df,
@@ -154,9 +154,9 @@ def preprocess_measurements(
         df=val_df, target_col=target_col, forecast_horizon=forecast_horizon
     )
 
-    train_df.to_csv("data/processed/train.csv", index=False)
-    test_df.to_csv("data/processed/test.csv", index=False)
-    val_df.to_csv("data/processed/val.csv", index=False)
+    train_df.to_csv("project_data/processed/train.csv", index=False)
+    test_df.to_csv("project_data/processed/test.csv", index=False)
+    val_df.to_csv("project_data/processed/val.csv", index=False)
 
 
 def _load_base_measurements_df(
@@ -271,9 +271,9 @@ def preprocess_inference_measurements(
     lags: list[int],
     start: datetime,
     end: datetime,
-    station_mapping_path: str = "data/station_mapping.json",
-    scaler_path: str = "data/std_scaler.joblib",
-    source_dir: str = "data/temp",
+    station_mapping_path: str = "project_data/station_mapping.json",
+    scaler_path: str = "project_data/std_scaler.joblib",
+    source_dir: str = "project_data/temp",
     measurements_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     param_ids = map_param_name_to_id(param_names)

@@ -4,10 +4,10 @@ from functools import lru_cache
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from src.fetch_data import fetch_hourly_measurements_on_the_fly
-from src.predict import load_model, predict_series
-from src.preprocessing import map_param_name_to_id
-from src.time_utils import to_local_datetime
+from airquality.inference.predict import load_model, predict_series
+from airquality.data.preprocessing import map_param_name_to_id
+from airquality.data.time_utils import to_local_datetime
+from airquality.data.fetch import fetch_hourly_measurements_on_the_fly
 
 
 class ObservationPoint(BaseModel):
