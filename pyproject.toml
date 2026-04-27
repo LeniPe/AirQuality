@@ -1,8 +1,13 @@
 [project]
 name = "airquality"
 version = "0.1.0"
-description = "Add your description here"
+description = "End-to-end NO2 forecasting pipeline: data ingestion, PyTorch training, FastAPI serving, and Dash dashboard."
 readme = "README.md"
+license = "MIT"
+authors = [
+  { name = "Lena Perzlmaier" },
+]
+keywords = ["air quality", "forecasting", "machine learning", "pytorch", "fastapi"]
 requires-python = ">=3.12"
 dependencies = [
   "dash>=3.2.0",
