@@ -12,19 +12,19 @@ requires-python = ">=3.12"
 dependencies = [
   "dash>=3.2.0",
   "fastapi>=0.116.1",
-  "folium>=0.12",
   "geopandas>=1.1.2",
   "mapclassify>=2.10.0",
   "matplotlib>=3.10.8",
   "pandas>=3.0.0",
+  "pillow>=12.2.0",
   "pydantic-settings>=2.0.0",
   "pyarrow>=17.0.0",
   "pyspark>=4.1.1",
-  "requests>=2.32.5",
+  "requests>=2.33.0",
   "tensorboard>=2.20.0",
   "torch>=2.10.0",
-  "torchvision>=0.24.1",
   "uvicorn>=0.35.0",
+  "werkzeug>=3.1.6",
 ]
 
 [[tool.uv.index]]
