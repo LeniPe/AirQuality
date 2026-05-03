@@ -86,6 +86,10 @@ def _fetch_data(station_id: str, parameter: str, type: str):
     Input("predict-btn", "n_clicks"),
     State("station-id", "value"),
     State("parameter", "value"),
+    running=[
+        (Output("predict-btn", "disabled"), True, False),
+        (Output("predict-btn", "children"), "Predicting...", "Predict"),
+    ],
 )
 def run_prediction(
     n_clicks: int,

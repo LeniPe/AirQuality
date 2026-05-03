@@ -121,14 +121,23 @@ textarea:focus {
   transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
 }
 
-#predict-btn:hover {
+#predict-btn:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 11px 24px rgba(17, 107, 122, 0.4);
   filter: saturate(1.04);
 }
 
-#predict-btn:active {
+#predict-btn:active:not(:disabled) {
   transform: translateY(0);
+}
+
+#predict-btn:disabled {
+  background: linear-gradient(110deg, #9fbaf4, #88a8ea, #9fbaf4);
+  background-size: 240% 100%;
+  color: rgba(243, 255, 251, 0.85);
+  cursor: wait;
+  box-shadow: none;
+  filter: grayscale(0.08) brightness(0.98);
 }
 
 #predict-btn:focus-visible {
