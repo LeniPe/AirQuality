@@ -53,7 +53,7 @@ def predict_endpoint(
     )
 
     model, feature_cols, _, target_col, lags, model_type = get_model_bundle()
-    pred_times, pred_values, _ = predict_series(
+    pred_times, pred_values = predict_series(
         feature_cols=feature_cols,
         target_col=target_col,
         lags=lags,
@@ -83,7 +83,7 @@ def predict_endpoint(
 
     return PredictionResponse(
         station_id=station_id,
-        forecast_origin_datetime=requested_dt,
+        forecast_origin_datetime=min(pred_times) - timedelta(hours=1),
         parameter=target_col.upper(),
         horizon_hours=len(forecast_points),
         predictions=forecast_points,

@@ -6,13 +6,12 @@ import joblib
 import pandas as pd
 
 import torch
-import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
 from airquality.models.regressor import SimpleRegressor, QuantileRegressor
 from airquality.data.fetch import fetch_hourly_measurements_on_the_fly
 from airquality.data.preprocessing import preprocess_inference_measurements, map_param_name_to_id
-from airquality.data.time_utils import to_local_datetime, LOCAL_TZ
+from airquality.data.time_utils import to_local_datetime, from_local_timestamp
 
 
 DEVICE = torch.device("cpu")
@@ -29,7 +28,7 @@ def predict_series(
     station_id: str,
     requested_dt: datetime.datetime,
     parameter: str = "NO2",
-) -> tuple[list[datetime.datetime], np.ndarray, list[tuple[datetime.datetime, float]]]:
+) -> tuple[list[datetime.datetime], np.ndarray]:
     parameter_name = parameter.strip().lower()
     if parameter_name != target_col.lower():
         raise ValueError(
@@ -37,7 +36,7 @@ def predict_series(
         )
 
     requested_dt = to_local_datetime(requested_dt)
-    history_hours = max(max(lags), 24) + 1
+    history_hours = max(lags) + 1
     scaler: StandardScaler = joblib.load("project_data/std_scaler.joblib")
     param_names = list(scaler.feature_names_in_)  # type: ignore[attr-defined]
     param_ids = map_param_name_to_id(param_names)
@@ -48,6 +47,18 @@ def predict_series(
         end=requested_dt,
         param_ids=param_ids,
     )
+
+    latest_observation_time = from_local_timestamp(max(raw_measurements.timestamp))
+
+    if latest_observation_time < requested_dt:
+        print(f"Latest observation time {latest_observation_time} is before the requested datetime {requested_dt}. Adjusting requested datetime to latest observation time.")
+        requested_dt = latest_observation_time
+        raw_measurements = fetch_hourly_measurements_on_the_fly(
+            station_id=station_id,
+            start=requested_dt - datetime.timedelta(hours=history_hours),
+            end=requested_dt,
+            param_ids=param_ids,
+        )
 
     df = preprocess_inference_measurements(
         param_names=param_names,
@@ -93,68 +104,7 @@ def predict_series(
     pred = inverse_scale_target(pred, target_col=target_col)
     pred_values = pred[0].detach().cpu().numpy().astype(float)
 
-    observed_points: list[tuple[datetime.datetime, float]] = []
-    for lag in sorted(lags, reverse=True):
-        lag_feature = f"{target_col}_lag{lag}"
-        if lag_feature not in feature_cols:
-            continue
-        lag_value = inverse_scale_target(
-            X[0, feature_cols.index(lag_feature)], target_col=target_col
-        )
-        observed_points.append(
-            (requested_dt - datetime.timedelta(hours=lag), float(lag_value.item()))
-        )
-
-    if len(observed_points) == 0:
-        raise ValueError(
-            f"No observed lag features found for target '{target_col}'. Expected at least one of: "
-            + ", ".join([f"{target_col}_lag{lag}" for lag in lags])
-        )
-
-    return pred_times, pred_values, observed_points
-
-
-def predict(
-    feature_cols: list[str],
-    target_col: str,
-    lags: list[int],
-    model: SimpleRegressor,
-    station_id: str = "0104",
-    datetime_str: str = "2026-03-05 08:00:00",
-):
-    requested_dt = to_local_datetime(
-        datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
-    )
-    pred_times, pred_values, observed_points = predict_series(
-        feature_cols=feature_cols,
-        target_col=target_col,
-        lags=lags,
-        model=model,
-        station_id=station_id,
-        requested_dt=requested_dt,
-        parameter=target_col,
-    )
-
-    observed_times = [t for t, _ in observed_points]
-    observed_values = [v for _, v in observed_points]
-    plot_predictions(pred_times, pred_values, observed_times, observed_values)
-
-
-def plot_predictions(pred_times, pred, observed_times, observed_values):
-    # Convert all times to naive datetime in local timezone for consistent plotting
-
-    plt.figure()
-    plt.title(f"NO2 concentration as of {pred_times[0]}")
-    plt.plot(pred_times, pred, label="Predicted", marker="o")
-    plt.plot(observed_times, observed_values, label="Observed", marker="o")
-    plt.xticks(rotation=45)
-    plt.gca().xaxis.set_major_formatter(
-        plt.matplotlib.dates.DateFormatter("%H:%M", tz=LOCAL_TZ)
-    )
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(OUTPUT_PATH)
-    plt.close()
+    return pred_times, pred_values
 
 
 def load_model():
